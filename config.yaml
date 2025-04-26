@@ -1,0 +1,37 @@
+---
+ root_path: 'D:/Project/EVAE_paper/'
+ working_dir: '.'
+ fname_dataset: 'data/em_train.csv'
+ token_file: 'data/em_train.smi'
+ fname_fps: 'data/em_fps.pkl'
+ fname_tokenizer: '.tokenizer.pkl'
+ fname_enc_params_VAE_H: 'parameters/encoder.pt'
+ fname_dec_params_VAE_H: 'parameters/decoder.pt'
+ fname_enc_params_CVAE_HC: 'parameters/encoder.pt'
+ fname_dec_params_CVAE_HC: 'parameters/decoder.pt'
+ fname_enc_params_CVAE_DHR: 'parameters/encoder.pt'
+ fname_dec_params_CVAE_DHR: 'parameters/decoder.pt'
+ sampled_dir: 'sampled'
+ target_sample_dir: 'target_sample'
+ maxLength: 64
+ batch_size: 256
+ num_epoch: 100
+ lr: 5.0e-3
+ threshold: 0.2
+ embed_dim: 32
+
+
+ vae_param:
+#  soap_dims: 2100
+  con_dims: 1
+  fc_dims: [2048, 512, 256, 128]
+  latent_dim: 64
+  hidden_dim: 256 #384
+  num_hidden: 4
+  num_vocabs: 19
+
+ soap_config:
+  rcut: 5.0    # 截断半径(Å)
+  nmax: 6      # 径向基函数数量
+  lmax: 5      # 角动量量子数
+  sigma: 0.2   # 高斯宽度(Å
