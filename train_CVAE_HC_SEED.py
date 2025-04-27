@@ -9,7 +9,7 @@ from util.tokens import Tokenizer
 from util.utils import temp_seed
 import util.utils as utils
 import torch
-import model.CVAE_HC as cvae
+import model.CVAE_HC_SEED as cvae
 import multiprocessing
 import numpy as np
 
@@ -37,7 +37,7 @@ def run_experiment(seed):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     with temp_seed(seed):
-        tokenizer = utils.get_tokenizer(model)
+        tokenizer = utils.ori_get_tokenizer(model=model)
         cfg = utils.__load_config(model=model)
         smilesDataset = SmilesDataset(
             cfg['fname_dataset'], tokenizer, cfg['maxLength'])
@@ -51,7 +51,7 @@ def run_experiment(seed):
             shuffle=True,
             num_workers=4,
             drop_last=True,
-            collate_fn=SmilesDataset.collate_fn,
+            collate_fn=smilesDataset.collate_fn,
             generator=generator
         )
 
@@ -78,9 +78,9 @@ def run_experiment(seed):
         )
 
         encoderScheduler = torch.optim.lr_scheduler.StepLR(
-            encoderOptimizer, step_size=5, gamma=0.7)
+            encoderOptimizer, step_size=5, gamma=0.95)
         decoderScheduler = torch.optim.lr_scheduler.StepLR(
-            decoderOptimizer, step_size=5, gamma=0.7)
+            decoderOptimizer, step_size=5, gamma=0.95)
 
         # 运行训练（假设已修改trainModel支持自定义logger）
         vae_model.trainModel(

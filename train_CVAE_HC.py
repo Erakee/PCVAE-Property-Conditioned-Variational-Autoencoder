@@ -9,7 +9,7 @@ import util.utils as utils
 import torch
 # import rnn
 # import vae
-import model.CVAE_HC as cvae
+import model.CVAE_HC_SEED as cvae
 import argparse
 import multiprocessing
 

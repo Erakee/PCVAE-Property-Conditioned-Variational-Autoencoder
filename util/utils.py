@@ -68,6 +68,18 @@ def get_tokenizer(model='vae_h'):
     config['vae_param']['num_vocabs'] = tokenizer.getTokensSize()# - 2
     return tokenizer
 
+def ori_get_tokenizer(model='vae_h'):
+    if os.path.exists(config['fname_tokenizer']):
+        print('read tokenizer from pickle file "%s"' % (config['fname_tokenizer']))
+        with open(config['fname_tokenizer'], 'rb') as f:
+            tokenizer = pickle.load(f)
+    else:
+        tokenizer = getTokenizer(config['token_file'], handleBraces=True)
+        with open(config['fname_tokenizer'], 'wb') as f:
+            pickle.dump(tokenizer, f)
+    config['vae_param']['num_vocabs'] = tokenizer.getTokensSize() - 2
+    return tokenizer
+
 def isValidSmiles(smiles):
     if smiles == '':
         return False

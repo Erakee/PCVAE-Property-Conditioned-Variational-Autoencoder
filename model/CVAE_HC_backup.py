@@ -133,6 +133,12 @@ class ConVAE(object):
                                hidden_dim, num_hidden, decoder_state_fname, device)
 
     def reconstruction_quality_per_sample(self, X, enthalpy):
+        """计算重构质量
+        Args:
+            X: 输入的one-hot编码分子表示
+        Returns:
+            diff: 重构准确度（每个位置正确重构的数量）
+        """
         self.encoder.eval()
         self.decoder.eval()
 
@@ -157,6 +163,13 @@ class ConVAE(object):
         return diff
 
     def sample(self, nSample):
+        """从隐空间采样
+        Args:
+            nSample: 采样数量
+        Returns:
+            生成的token序列
+        """
+        # 从标准正态分布采样
         latent_vec = torch.randn(
             (nSample, self.latent_dim), device=self.device)
         _enthalpy = torch.randn(nSample, device=self.device)  # 这里随机采样的生成焓也随机生成
@@ -166,6 +179,13 @@ class ConVAE(object):
         return numVectors.cpu(), None
 
     def latent_space_quality(self, nSample, tokenizer=None):
+        """评估隐空间质量
+        Args:
+            nSample: 采样数量
+            tokenizer: 分词器
+        Returns:
+            有效SMILES的数量
+        """
         self.decoder.eval()
         # 从隐空间采样并生成分子
         numVectors, _ = self.sample(nSample)# 采样得到用于表示分子的数字序列
@@ -184,6 +204,49 @@ class ConVAE(object):
         # Placeholder for the function that predicts enthalpy from SMILES
         pass
 
+    # def calculate_enthalpy_loss(self, gen_smiles, cond_enthalpy, lb, ub): # 需要数据集中的归一化上下限来反归一化，以和预测数据的大小匹配
+    #     # Calculate the loss for the enthalpy prediction
+    #     predicted_enthalpy = []
+    #     valid_enthalpy = []
+    #     loss_per_sample = []  # 用来保存每个样本的损失值
+    #
+    #     for idx, smiles in enumerate(gen_smiles):#对于每个smiles，如果有效则使用predict方法，并append有效值；若无效则append 0
+    #         if utils.isValidSmiles(smiles):
+    #             predicted_value = predict_enthalpy(smiles)
+    #             predicted_enthalpy.append(predicted_value)
+    #             valid_enthalpy.append(cond_enthalpy[idx])  # 记录有效的 enthalpy
+    #             loss_per_sample.append(5)  # 计算有效样本时加入损失值（这里暂时设置为 0，实际损失会计算）
+    #         else:
+    #             # print(f"Invalid SMILES string: {smiles}, setting loss to 0.")
+    #             predicted_enthalpy.append(0)  # 无效的 SMILES，损失记为 0
+    #             valid_enthalpy.append(0)  # 无效的 enthalpy，损失记为 0
+    #             loss_per_sample.append(0)  # 无效分子的损失设置为 0
+    #
+    #     # 将有效的预测值和 enthalpy 转换为张量
+    #     predicted_enthalpy_tensor = torch.tensor(predicted_enthalpy, device=self.device)
+    #     valid_enthalpy_tensor = torch.tensor(valid_enthalpy, device=self.device)
+    #
+    #     # 将每个样本的损失值保存在 loss_per_sample 中
+    #     loss_per_sample_tensor = torch.tensor(loss_per_sample, device=self.device)
+    #     # 计算有效的损失，只对有效的样本计算
+    #     # 如果有有效的样本，则计算条件损失的平均值
+    #     # valid_mask = float(valid_enthalpy != 0)#.float()  # 有效分子的mask
+    #     num_valids = 0
+    #     for i, val in enumerate(valid_enthalpy_tensor):
+    #         if val != 0:
+    #             num_valids +=1
+    #
+    #     valid_mask = (valid_enthalpy_tensor != 0).to(torch.float32)
+    #     # num_valid = valid_mask.sum()
+    #     if num_valids > 0: # 这里有问题，如果一直是输出20的话那就没有梯度了？然后num_valid判断有点问题
+    #         valid_enthalpy_tensor = valid_enthalpy_tensor * (ub - lb) + lb  # Reverse normalization
+    #         cond_loss_mean = torch.nn.functional.mse_loss(predicted_enthalpy_tensor[valid_mask != 0], valid_enthalpy_tensor[valid_mask != 0])  # 只计算有效样本的损失
+    #         cond_loss_mean = cond_loss_mean / num_valids
+    #     else:
+    #         valid_enthalpy_tensor = torch.tensor([0.0] * len(valid_enthalpy_tensor), device=self.device)
+    #         cond_loss_mean = torch.tensor(20.0, device=self.device)  # 如果没有有效样本，返回1
+    #
+    #     return cond_loss_mean # loss_per_sample_tensor, predicted_enthalpy_tensor, valid_enthalpy_tensor
     def calculate_enthalpy_loss(self, gen_smiles, cond_enthalpy, lb, ub):  # 需要数据集中的归一化上下限来反归一化，以和预测数据的大小匹配
         # Calculate the loss for the enthalpy prediction
         gt_enthalpy = cond_enthalpy

@@ -74,7 +74,7 @@ def get_soap_descriptors(smiles_list, enthalpy_list, smiles_indices):
         descriptors.append(mol_desc)
     return np.array(descriptors), valid_smiles, valid_smiles_indices, valid_enthalpy
 
-class SmilesDataset(torch.utils.data.Dataset):
+class ori_SmilesDataset(torch.utils.data.Dataset):
     def __init__(self, fname, tokenizer, maxLength):
         super().__init__()
         self.tokenizer = tokenizer
@@ -109,7 +109,52 @@ class SmilesDataset(torch.utils.data.Dataset):
                 one_hot_code[i, j, n - 2] = 1
             if j + 1 < self.maxLength:
                 one_hot_code[i, j + 1:, 0] = 1
-        return one_hot_code    
+        return one_hot_code
+
+
+class SmilesDataset(torch.utils.data.Dataset):
+    def __init__(self, fname, tokenizer, maxLength):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.maxLength = maxLength
+        self.data = pd.read_csv(fname)
+        self.smiles = self.data['smiles'].tolist()
+        self.enthalpy = self.data['heat_of_formation'].tolist()
+        self.enthalpy, self.lb, self.ub = preprocess(self.enthalpy)
+
+        # 将collate_fn绑定到当前实例（关键修改！）
+        self.collate_fn = self._one_hot_collate_fn
+
+    def __len__(self):
+        return len(self.smiles)
+
+    def __getitem__(self, i):
+        return self.smiles[i], self.enthalpy[i]
+
+    def _getbound(self):
+        return self.lb, self.ub
+
+    def _one_hot_collate_fn(self, batch):
+        """实例方法版本，自动获取self的tokenizer和maxLength"""
+        skip_vocab = 2
+        smilesStrs = [item[0] for item in batch]
+        enthalpies = torch.tensor([item[1] for item in batch], dtype=torch.float32)
+
+        tokenVectors = self.tokenizer.tokenize(smilesStrs, useTokenDict=True)
+        numVectors = self.tokenizer.getNumVector(tokenVectors)
+
+        one_hot_code = torch.zeros(
+            (len(batch), self.maxLength, self.tokenizer.getTokensSize() - skip_vocab),
+            dtype=torch.float32
+        )
+
+        for i, vec in enumerate(numVectors):
+            for j, n in enumerate(vec):
+                one_hot_code[i, j, n - 2] = 1
+            if j + 1 < self.maxLength:
+                one_hot_code[i, j + 1:, 0] = 1
+
+        return one_hot_code, enthalpies
 
 
 class SmilesDictDataset(torch.utils.data.Dataset):
@@ -124,9 +169,6 @@ class SmilesDictDataset(torch.utils.data.Dataset):
         self.enthalpy = self.data['heat_of_formation'].tolist()
         self.enthalpy, self.lb, self.ub = preprocess(self.enthalpy)
         self.smiles_indices = self._preprocess_smiles()
-        # 将 processed 列表转换为一个大的张量
-        # self.smiles_indices = torch.stack(self.smiles_indices)
-        # self.smiles_indices = self.smiles_indices.to(torch.float32)
 
     def __len__(self):
         return len(self.smiles)

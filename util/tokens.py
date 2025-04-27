@@ -71,16 +71,16 @@ class Tokenizer(object):
         smileslist = []
         for numVector in numVectors:
             numVector = numVector.tolist()
-            for i in range(len(numVector) - 1, -1, -1):
-                if numVector[i] != 2:
+            for i in range(len(numVector) - 1, -1, -1):# 从后往前遍历
+                if numVector[i] != 2:## 如果当前元素不等于 2，则跳出循环
                     break
-                else:
+                else:# 如果当前元素等于 2，则移除该元素
                     numVector.pop(i)
-            if len(numVector) > 0 and numVector[-1] == 1:
+            if len(numVector) > 0 and numVector[-1] == 1:# 如果处理后的向量长度大于 0 且最后一个元素为 1，则移除最后一个元素
                 numVector.pop()
-            if len(numVector) > 0 and numVector[0] == 0:
+            if len(numVector) > 0 and numVector[0] == 0: # 如果处理后的向量长度大于 0 且第一个元素为 0，则移除第一个元素
                 numVector.pop(0)
-            smileslist.append(''.join([self.tokensInvDict[n] for n in numVector]))
+            smileslist.append(''.join([self.tokensInvDict[n] for n in numVector]))# 将处理后的向量中的每个元素通过 self.tokensInvDict 映射为对应的字符，并拼接成字符串
         return smileslist
 
     def getSmiles(self, numVectors):  # 改进使用索引,去除工具 Token（如 <start>、<end>、<pad>）并生成 SMILES

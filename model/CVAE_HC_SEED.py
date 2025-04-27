@@ -1,40 +1,128 @@
 import sys
 import os
+from pathlib import Path
 
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
 # Add the parent directory to the system path
+import numpy as np
+from matplotlib import pyplot as plt
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import util.utils as utils
-# from utils import utils
 import time
 from util.enthalpy_predictor import predict_enthalpy
 
+#########################################################################
+############ 这个版本中的numvocab按照tokenizer来的话是19，但是实际上dataset预处理后留下17，要注意enc和dec的输入输出维度
+############ 尤其是decoder的输出怎么转换成满足19字典长度的
+#########################################################################
+
+class TrainingLogger:
+    def __init__(self, base_dir=None):
+        if base_dir:
+            self.log_dir = Path(base_dir)
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            base_dir = "experiments"
+            self.exp_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.log_dir = os.path.join(base_dir, self.exp_time)
+        os.makedirs(self.log_dir, exist_ok=True)
+
+        # 初始化数据存储
+        self.log_data = pd.DataFrame(columns=[
+            'epoch', 'recon_loss', 'kld_loss',
+            'cond_loss', 'total_loss', 'valid_rate'
+        ])
+
+        # 图表样式设置
+        plt.style.use('seaborn')
+        self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+
+    def log_metrics(self, epoch, metrics_dict):
+        """记录单epoch指标"""
+        new_row = pd.DataFrame([{
+            'epoch': epoch,
+            **metrics_dict
+        }])
+        self.log_data = pd.concat([self.log_data, new_row], ignore_index=True)
+
+        # 实时保存到Excel
+        excel_path = os.path.join(self.log_dir, 'training_log.xlsx')
+        self.log_data.to_excel(excel_path, index=False)
+
+    def plot_losses(self, epoch_interval=50):
+        """绘制损失曲线并保存"""
+        if len(self.log_data) == 0:
+            return
+
+        plt.figure(figsize=(12, 6), facecolor='white')  # 设置图表背景为白色
+
+        # 绘制主损失曲线
+        plt.subplot(1, 2, 1)
+        for i, col in enumerate(['recon_loss', 'kld_loss', 'cond_loss']):
+            line, = plt.plot(self.log_data['epoch'], self.log_data[col],
+                             color=self.colors[i], label=col.replace('_', ' ').title())
+            plt.setp(line, linewidth=2.0)  # 设置线条宽度为2.0，使线条更清晰
+        plt.xlabel('Epoch', fontsize=12)  # 设置x轴标签字体大小为12
+        plt.ylabel('Loss', fontsize=12)  # 设置y轴标签字体大小为12
+        plt.legend(fontsize=12)  # 设置图例字体大小为12
+
+        # 绘制验证率和总损失
+        plt.subplot(1, 2, 2)
+        ax1 = plt.gca()
+        line1, = ax1.plot(self.log_data['epoch'], self.log_data['total_loss'],
+                          color=self.colors[3], label='Total Loss')
+        plt.setp(line1, linewidth=2.0)  # 设置线条宽度为2.0，使线条更清晰
+        ax1.set_xlabel('Epoch', fontsize=12)  # 设置x轴标签字体大小为12
+        ax1.set_ylabel('Loss', fontsize=12)  # 设置y轴标签字体大小为12
+
+        ax2 = ax1.twinx()
+        line2, = ax2.plot(self.log_data['epoch'], self.log_data['valid_rate'] * 100,
+                          color='#9467bd', linestyle='--', label='Valid Rate (%)')
+        plt.setp(line2, linewidth=2.0)  # 设置线条宽度为2.0，使线条更清晰
+        ax2.set_ylabel('Validation Rate (%)', fontsize=12)  # 设置y轴标签字体大小为12
+
+        plt.title(f"Training Progress @ Epoch {self.log_data['epoch'].max()}", fontsize=14)  # 设置标题字体大小为14
+        plt.tight_layout()
+
+        # 保存图片
+        plot_path = os.path.join(self.log_dir,
+                                 f"loss_plot_epoch_{self.log_data['epoch'].max()}.png")
+        plt.savefig(plot_path)
+        plt.close()
+
 
 class Encoder(torch.nn.Module):
-    def __init__(self, maxLength, num_vocabs, con_dims, fc_dims, latent_dim, state_fname, device) -> None:
+    def __init__(self, maxLength, num_vocabs, con_dims, fc_dims, latent_dim,
+                 state_fname, device) -> None:
         super().__init__()
+        self.num_vocabs = num_vocabs  #注意现在实际的vocab是19，但是普通smilesdataset的数据处理后是17，按照17来的
         self.state_fname = state_fname
         self.device = device
+        input_dim = maxLength * (num_vocabs + con_dims)
         self.fc = torch.nn.Sequential(
             torch.nn.Flatten(),
-            torch.nn.Linear(maxLength * num_vocabs + maxLength * con_dims,
-                            fc_dims[0], device=self.device),
+            torch.nn.Linear(input_dim, fc_dims[0], device=self.device),
             torch.nn.ReLU()
         )
         for i in range(1, len(fc_dims)):  # [1,3)
-            self.fc.append(torch.nn.Linear(
-                fc_dims[i - 1], fc_dims[i], device=self.device))
+            self.fc.append(torch.nn.Linear(fc_dims[i - 1], fc_dims[i], device=self.device))
             self.fc.append(torch.nn.ReLU())
         self.mu = torch.nn.Linear(fc_dims[-1], latent_dim, device=self.device)
         self.logvar = torch.nn.Linear(
             fc_dims[-1], latent_dim, device=self.device)
 
     def forward(self, X, enthalpy):
-        enthalpy_expanded = enthalpy.unsqueeze(1).unsqueeze(2)  # (512, 1, 1)
-        enthalpy_expanded = enthalpy_expanded.expand(-1, X.size(1), -1)  # (512, 128,1)
-        X = torch.cat((X.to(self.device), enthalpy_expanded.to(self.device)), dim=2)  # (512, 128,18)
-        X = self.fc(X)  # (512, 128)
-        mu, logvar = self.mu(X), self.logvar(X)  # (512, 64)
+        enthalpy_expanded = enthalpy.unsqueeze(1).unsqueeze(2)  # (256, 1, 1)
+        enthalpy_expanded = enthalpy_expanded.expand(-1, X.size(1), -1)  # (256, 64,1)
+        X = torch.cat((X.to(self.device), enthalpy_expanded.to(self.device)), dim=2)  # (256, 64,18)
+        X = self.fc(X)  # (256, 64)
+        mu, logvar = self.mu(X), self.logvar(X)  # (256, 64)
         return self.reparameterize(mu, logvar), mu, logvar
 
     @staticmethod
@@ -64,9 +152,9 @@ class Decoder(torch.nn.Module):
         self.num_vacabs = num_vocabs
         self.device = device
         self.con_dims = con_dims
-        self.gru = torch.nn.GRU(latent_dim + num_vocabs + con_dims, hidden_dim,
+        self.gru = torch.nn.GRU(latent_dim + self.num_vacabs + con_dims, hidden_dim,
                                 num_hidden, batch_first=True, device=self.device)
-        self.fc = torch.nn.Linear(hidden_dim, num_vocabs, device=self.device)
+        self.fc = torch.nn.Linear(hidden_dim, self.num_vacabs, device=self.device)
 
     def forward(self, latent_vec, enthalpy, inp, freerun=False, randomchoose=True,
                 condition=True):  # decoder(latent_vec, enthalpy, X)
@@ -133,12 +221,6 @@ class ConVAE(object):
                                hidden_dim, num_hidden, decoder_state_fname, device)
 
     def reconstruction_quality_per_sample(self, X, enthalpy):
-        """计算重构质量
-        Args:
-            X: 输入的one-hot编码分子表示
-        Returns:
-            diff: 重构准确度（每个位置正确重构的数量）
-        """
         self.encoder.eval()
         self.decoder.eval()
 
@@ -163,13 +245,6 @@ class ConVAE(object):
         return diff
 
     def sample(self, nSample):
-        """从隐空间采样
-        Args:
-            nSample: 采样数量
-        Returns:
-            生成的token序列
-        """
-        # 从标准正态分布采样
         latent_vec = torch.randn(
             (nSample, self.latent_dim), device=self.device)
         _enthalpy = torch.randn(nSample, device=self.device)  # 这里随机采样的生成焓也随机生成
@@ -179,13 +254,6 @@ class ConVAE(object):
         return numVectors.cpu(), None
 
     def latent_space_quality(self, nSample, tokenizer=None):
-        """评估隐空间质量
-        Args:
-            nSample: 采样数量
-            tokenizer: 分词器
-        Returns:
-            有效SMILES的数量
-        """
         self.decoder.eval()
         # 从隐空间采样并生成分子
         numVectors, _ = self.sample(nSample)# 采样得到用于表示分子的数字序列
@@ -199,54 +267,7 @@ class ConVAE(object):
         # print("ValidSmilesStrs: %s" % (validSmilesStrs,))
         return len(validSmilesStrs)
 
-    def predict_enthalpy_list(self, gen_smiles, cond_enthalpy):
-        # 调用模型，最好是改一下训练逻辑，就是一个batch训练完之后，收集所有生成的smiles列表，判断有效性，有效的再调用模型进行预测，统一返回预测生成焓结果
-        # Placeholder for the function that predicts enthalpy from SMILES
-        pass
 
-    # def calculate_enthalpy_loss(self, gen_smiles, cond_enthalpy, lb, ub): # 需要数据集中的归一化上下限来反归一化，以和预测数据的大小匹配
-    #     # Calculate the loss for the enthalpy prediction
-    #     predicted_enthalpy = []
-    #     valid_enthalpy = []
-    #     loss_per_sample = []  # 用来保存每个样本的损失值
-    #
-    #     for idx, smiles in enumerate(gen_smiles):#对于每个smiles，如果有效则使用predict方法，并append有效值；若无效则append 0
-    #         if utils.isValidSmiles(smiles):
-    #             predicted_value = predict_enthalpy(smiles)
-    #             predicted_enthalpy.append(predicted_value)
-    #             valid_enthalpy.append(cond_enthalpy[idx])  # 记录有效的 enthalpy
-    #             loss_per_sample.append(5)  # 计算有效样本时加入损失值（这里暂时设置为 0，实际损失会计算）
-    #         else:
-    #             # print(f"Invalid SMILES string: {smiles}, setting loss to 0.")
-    #             predicted_enthalpy.append(0)  # 无效的 SMILES，损失记为 0
-    #             valid_enthalpy.append(0)  # 无效的 enthalpy，损失记为 0
-    #             loss_per_sample.append(0)  # 无效分子的损失设置为 0
-    #
-    #     # 将有效的预测值和 enthalpy 转换为张量
-    #     predicted_enthalpy_tensor = torch.tensor(predicted_enthalpy, device=self.device)
-    #     valid_enthalpy_tensor = torch.tensor(valid_enthalpy, device=self.device)
-    #
-    #     # 将每个样本的损失值保存在 loss_per_sample 中
-    #     loss_per_sample_tensor = torch.tensor(loss_per_sample, device=self.device)
-    #     # 计算有效的损失，只对有效的样本计算
-    #     # 如果有有效的样本，则计算条件损失的平均值
-    #     # valid_mask = float(valid_enthalpy != 0)#.float()  # 有效分子的mask
-    #     num_valids = 0
-    #     for i, val in enumerate(valid_enthalpy_tensor):
-    #         if val != 0:
-    #             num_valids +=1
-    #
-    #     valid_mask = (valid_enthalpy_tensor != 0).to(torch.float32)
-    #     # num_valid = valid_mask.sum()
-    #     if num_valids > 0: # 这里有问题，如果一直是输出20的话那就没有梯度了？然后num_valid判断有点问题
-    #         valid_enthalpy_tensor = valid_enthalpy_tensor * (ub - lb) + lb  # Reverse normalization
-    #         cond_loss_mean = torch.nn.functional.mse_loss(predicted_enthalpy_tensor[valid_mask != 0], valid_enthalpy_tensor[valid_mask != 0])  # 只计算有效样本的损失
-    #         cond_loss_mean = cond_loss_mean / num_valids
-    #     else:
-    #         valid_enthalpy_tensor = torch.tensor([0.0] * len(valid_enthalpy_tensor), device=self.device)
-    #         cond_loss_mean = torch.tensor(20.0, device=self.device)  # 如果没有有效样本，返回1
-    #
-    #     return cond_loss_mean # loss_per_sample_tensor, predicted_enthalpy_tensor, valid_enthalpy_tensor
     def calculate_enthalpy_loss(self, gen_smiles, cond_enthalpy, lb, ub):  # 需要数据集中的归一化上下限来反归一化，以和预测数据的大小匹配
         # Calculate the loss for the enthalpy prediction
         gt_enthalpy = cond_enthalpy
@@ -265,7 +286,6 @@ class ConVAE(object):
                     valid_enthalpy.append(predicted_value) # 单独拎出有效结果，后面用len统计
 
         # 将有效的预测值和 enthalpy 转换为张量
-        predicted_enthalpy_tensor = torch.tensor(predicted_enthalpy, device=self.device)
         valid_enthalpy_tensor = torch.tensor(valid_enthalpy, device=self.device)
         gt_enthalpy_tensor = torch.tensor(gt_enthalpy, device=self.device)
         gt_mask_enthalpy_tensor = torch.tensor([gt_enthalpy_tensor[i] for i in range(len(gt_enthalpy_tensor)) if _mask[i] == 1], device=self.device)
@@ -280,45 +300,50 @@ class ConVAE(object):
         return cond_loss_mean  # loss_per_sample_tensor, predicted_enthalpy_tensor, valid_enthalpy_tensor
 
     def loss_per_sample(self, pred_y, y, mu, logvar, gen_smiles, true_enthalpy, lb, ub):
-        reconstruction_loss = torch.nn.functional.cross_entropy(  # 都是(512, 128, 17)
-            pred_y.transpose(1, 2), y.transpose(1, 2), reduction='none').sum(dim=1)  # 输出结果是个tensor(512)
-        kld_loss = torch.sum(-0.5 * (1.0 + logvar - mu.pow(2) - logvar.exp()), dim=1)  # 输出结果是个tensor(512)
+        reconstruction_loss = torch.nn.functional.cross_entropy(  # 都是(256, 64, 17)
+            pred_y.transpose(1, 2), y.transpose(1, 2), reduction='none').sum(dim=1)  # 输出结果是个tensor(256)
+        kld_loss = torch.sum(-0.5 * (1.0 + logvar - mu.pow(2) - logvar.exp()), dim=1)  # 输出结果是个tensor(256)
         cond_loss_mean = self.calculate_enthalpy_loss(gen_smiles, true_enthalpy, lb, ub)
         return reconstruction_loss, kld_loss, cond_loss_mean
 
     def trainModel(self, dataloader, encoderOptimizer, decoderOptimizer, encoderScheduler, decoderScheduler, KLD_alpha,
-                   nepoch, tokenizer, printInterval, lb, ub):
+                   nepoch, tokenizer, printInterval, lb, ub, seed, log_dir='training_params/CVAE_HC/default_dir'):
         self.encoder.loadState()
         self.decoder.loadState()
         self.lb = lb
         self.ub = ub
+        logger = TrainingLogger(base_dir=log_dir)
         minloss = None
         numSample = 100  # 训练过程中采样，用于计算valid数量
         for epoch in range(1, nepoch + 1):
             reconstruction_loss_list, accumulated_reconstruction_loss, kld_loss_list, accumulated_kld_loss, cond_loss_list, accumulated_cond_loss = [], 0, [], 0, [], 0
             quality_list, numValid_list = [], []
+
             for nBatch, (X, enthalpy) in enumerate(dataloader, 1):
                 # print(f'Epoch {epoch}, batch {nBatch} is initialized, start training for this batch.')
                 self.encoder.train()
                 self.decoder.train()
+
                 X = X.to(torch.float32)  # 将 X 转换为 float32
                 enthalpy = enthalpy.to(torch.float32)
                 X = X.to(self.device)
                 enthalpy = enthalpy.to(self.device)
-                latent_vec, mu, logvar = self.encoder(X, enthalpy)  # (512, 64)
+
+                latent_vec, mu, logvar = self.encoder(X, enthalpy)  # (256, 64)
                 # print('Encoder processed!')
-                pred_y = self.decoder(mu, enthalpy, X)  # (512, 128,17)  # 对比时改成latent_vec
+                pred_y = self.decoder(latent_vec, enthalpy, X)  # (256, 64,17)  # 对比时改成latent_vec
                 # print('Decoder processed!')
-                # predicted_indices = pred_y.argmax(dim=2)  # (512, 128) 这里是为了将输出解码为smiles，方便后续直接使用gnn预测生成焓
-                # predicted_smiles = tokenizer.getSmiles(predicted_indices)  # list 512
+                # predicted_indices = pred_y.argmax(dim=2)  # (256, 64) 这里是为了将输出解码为smiles，方便后续直接使用gnn预测生成焓
+                # predicted_smiles = tokenizer.getSmiles(predicted_indices)  # list 256
                 # 这里是新加的，使用原有方法来转换成onehot，再用字典转回smiles  3. 将预测转换为one-hot形式
                 pred_one_hot = torch.zeros_like(X, dtype=X.dtype)
                 pred_y_argmax = torch.nn.functional.softmax(pred_y, dim=2).argmax(dim=2)
                 for i in range(pred_one_hot.shape[0]):
                     for j in range(pred_one_hot.shape[1]):
                         pred_one_hot[i, j, pred_y_argmax[i, j]] = 1
-                predicted_indices = pred_one_hot.argmax(dim=2)
-                predicted_smiles = tokenizer.getSmiles(predicted_indices)  # list 512
+                predicted_indices = pred_one_hot.argmax(dim=2)  # 处理后的索引 (0~16)
+                predicted_indices_original = predicted_indices + 2  # 恢复为原始索引 (2~18)
+                predicted_smiles = tokenizer.getSmiles(predicted_indices_original)
                 reconstruction_loss, kld_loss, cond_loss_mean = self.loss_per_sample(
                     pred_y, X, mu, logvar, predicted_smiles, enthalpy, lb, ub)
                 reconstruction_mean, kld_mean, cond_mean = reconstruction_loss.mean(), kld_loss.mean() * \
