@@ -1,0 +1,9 @@
+C1(=NC(=O)NN1)[N+](=O)[O-]
+[O-][N+](=O)C1=C(NN=N1)C=C
+NC1=NN(O)C(C=C)=C1[N+]([O-])=O
+CN(C)N1N=CN=C1[N+]([O-])=O
+CCOC(=NC)C1=C(NC(=N1)[N+]([O-])=O)[N+]([O-])=O
+ON=CC1=NC(=CN1)[N+]([O-])=O
+ONC1=NNC=C1[N+]([O-])=O
+ON1C=C(CC=N)C(=N1)[N+]([O-])=O
+ON1C=C(C(=N1)C#N)[N+]([O-])=O

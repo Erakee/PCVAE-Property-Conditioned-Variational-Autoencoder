@@ -17,7 +17,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Load the model
 model = MPNNModel(num_layers=2, emb_dim=256, in_dim=42, edge_dim=10, out_dim=1).to(device)
-model.load_state_dict(torch.load('enthalpy/stateGNN.pt'))  # Adjust the path as necessary
+# model.load_state_dict(torch.load('enthalpy/stateGNN.pt'))  # Adjust the path as necessary
+model.load_state_dict(torch.load(r'D:\Project\EVAE_paper\enthalpy\stateGNN.pt'))
 model.eval()
 
 
@@ -172,10 +173,10 @@ def predict_enthalpy(smiles_str):
 
 
 # Example usage:
-# smiles_exp = 'C1(=NC(=O)NN1)[N+](=O)[O-]'  # 单个字符会报错，如'C'
-# enthalpy = predict_enthalpy(smiles_exp)
-# print(f"Predicted Enthalpy: {enthalpy}")
+smiles_exp = '[O-][N+](=O)C1=NNC(=O)N1'  # 单个字符会报错，如'C'
+enthalpy = predict_enthalpy(smiles_exp)
+print(f"Predicted Enthalpy: {enthalpy}")
 
- # NTO pred -2.635404109954834 C1(=NC(=O)NN1)[N+](=O)[O-]
+ # NTO pred 4 C1(=NC(=O)NN1)[N+](=O)[O-]
  # TNB -0.6554650664329529 C1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]
  # TNT CC1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]

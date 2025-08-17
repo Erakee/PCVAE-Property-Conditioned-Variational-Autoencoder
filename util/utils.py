@@ -48,6 +48,9 @@ def __load_config(fyaml='D:/Project/EVAE_paper/config.yaml', model='vae_h'):
 
 config = __load_config()
 
+def p_cfg(model):
+    return __load_config(model=model)
+
 def mkdir_multi(path_str):
     if os.path.isdir(path_str) or path_str == '':
         return

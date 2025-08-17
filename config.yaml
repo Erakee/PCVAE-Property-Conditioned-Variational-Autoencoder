@@ -28,7 +28,7 @@
   latent_dim: 64
   hidden_dim: 256 #384
   num_hidden: 4
-  num_vocabs: 17  # 运行DHR时19，运行HC时17
+  num_vocabs: 19  # 运行DHR时19，运行HC时17
 
  soap_config:
   rcut: 5.0    # 截断半径(Å)

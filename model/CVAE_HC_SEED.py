@@ -17,10 +17,6 @@ import util.utils as utils
 import time
 from util.enthalpy_predictor import predict_enthalpy
 
-#########################################################################
-############ 这个版本中的numvocab按照tokenizer来的话是19，但是实际上dataset预处理后留下17，要注意enc和dec的输入输出维度
-############ 尤其是decoder的输出怎么转换成满足19字典长度的
-#########################################################################
 
 class TrainingLogger:
     def __init__(self, base_dir=None):
@@ -101,7 +97,7 @@ class Encoder(torch.nn.Module):
     def __init__(self, maxLength, num_vocabs, con_dims, fc_dims, latent_dim,
                  state_fname, device) -> None:
         super().__init__()
-        self.num_vocabs = num_vocabs  #注意现在实际的vocab是19，但是普通smilesdataset的数据处理后是17，按照17来的
+        self.num_vocabs = num_vocabs
         self.state_fname = state_fname
         self.device = device
         input_dim = maxLength * (num_vocabs + con_dims)
@@ -149,18 +145,18 @@ class Decoder(torch.nn.Module):
         super().__init__()
         self.state_fname = state_fname
         self.maxLength = maxLength
-        self.num_vacabs = num_vocabs
+        self.num_vocabs = num_vocabs
         self.device = device
         self.con_dims = con_dims
-        self.gru = torch.nn.GRU(latent_dim + self.num_vacabs + con_dims, hidden_dim,
+        self.gru = torch.nn.GRU(latent_dim + self.num_vocabs + con_dims, hidden_dim,
                                 num_hidden, batch_first=True, device=self.device)
-        self.fc = torch.nn.Linear(hidden_dim, self.num_vacabs, device=self.device)
+        self.fc = torch.nn.Linear(hidden_dim, self.num_vocabs, device=self.device)
 
     def forward(self, latent_vec, enthalpy, inp, freerun=False, randomchoose=True,
                 condition=True):  # decoder(latent_vec, enthalpy, X)
-        latent_vec = latent_vec.to(self.device)  # (512, 64)
+        latent_vec = latent_vec.to(self.device)  # (256, 64)
         enthalpy_ori = enthalpy
-        enthalpy = enthalpy.unsqueeze(1).unsqueeze(2).expand(-1, self.maxLength, -1)  # (512, 128, 1)
+        enthalpy = enthalpy.unsqueeze(1).unsqueeze(2).expand(-1, self.maxLength, -1)  # (256, 64, 1)
 
         if not freerun:
             X = latent_vec.unsqueeze(1).expand(-1, self.maxLength, -1)
@@ -173,10 +169,10 @@ class Decoder(torch.nn.Module):
             X, _ = self.gru(X)
             return self.fc(X)
         else:
-            out = torch.zeros((latent_vec.shape[0], self.maxLength, self.num_vacabs), dtype=torch.float32)
-            X_latent = latent_vec.unsqueeze(1)  # (512, 1, 64)
-            X = torch.concat([X_latent, torch.zeros((latent_vec.shape[0], 1, self.num_vacabs), dtype=torch.float32,
-                                                    device=self.device)], dim=2)  # (512, 1, 64+17)
+            out = torch.zeros((latent_vec.shape[0], self.maxLength, self.num_vocabs), dtype=torch.float32)
+            X_latent = latent_vec.unsqueeze(1)  # (256, 1, 64)
+            X = torch.concat([X_latent, torch.zeros((latent_vec.shape[0], 1, self.num_vocabs), dtype=torch.float32,
+                                                    device=self.device)], dim=2)  # (256, 1, 64+17)
             if condition:
                 X = torch.concat([X, enthalpy_ori.unsqueeze(1).unsqueeze(2)], dim=2)
             else:
@@ -227,7 +223,7 @@ class ConVAE(object):
         # 1. 通过编码器获取隐空间表示aaaa
         latent_vec, mu, logvar = self.encoder(X, enthalpy)
         # 2. 通过解码器重构输入
-        pred_y = self.decoder(mu, enthalpy, X)
+        pred_y = self.decoder(latent_vec, enthalpy, X)
         # reconstruction_loss, kld_loss = self.loss_per_sample(pred_y, X, mu, logvar)
 
         # 3. 将预测转换为one-hot形式
@@ -315,12 +311,13 @@ class ConVAE(object):
         logger = TrainingLogger(base_dir=log_dir)
         minloss = None
         numSample = 100  # 训练过程中采样，用于计算valid数量
+        scheduler_count = 0
+
         for epoch in range(1, nepoch + 1):
-            reconstruction_loss_list, accumulated_reconstruction_loss, kld_loss_list, accumulated_kld_loss, cond_loss_list, accumulated_cond_loss = [], 0, [], 0, [], 0
+            reconstruction_loss_list, accumulated_reconstruction_loss, kld_loss_list, accumulated_kld_loss, cond_loss_list, accumulated_cond_loss, total_loss_list = [], 0, [], 0, [], 0, []
             quality_list, numValid_list = [], []
 
             for nBatch, (X, enthalpy) in enumerate(dataloader, 1):
-                # print(f'Epoch {epoch}, batch {nBatch} is initialized, start training for this batch.')
                 self.encoder.train()
                 self.decoder.train()
 
@@ -330,12 +327,7 @@ class ConVAE(object):
                 enthalpy = enthalpy.to(self.device)
 
                 latent_vec, mu, logvar = self.encoder(X, enthalpy)  # (256, 64)
-                # print('Encoder processed!')
                 pred_y = self.decoder(latent_vec, enthalpy, X)  # (256, 64,17)  # 对比时改成latent_vec
-                # print('Decoder processed!')
-                # predicted_indices = pred_y.argmax(dim=2)  # (256, 64) 这里是为了将输出解码为smiles，方便后续直接使用gnn预测生成焓
-                # predicted_smiles = tokenizer.getSmiles(predicted_indices)  # list 256
-                # 这里是新加的，使用原有方法来转换成onehot，再用字典转回smiles  3. 将预测转换为one-hot形式
                 pred_one_hot = torch.zeros_like(X, dtype=X.dtype)
                 pred_y_argmax = torch.nn.functional.softmax(pred_y, dim=2).argmax(dim=2)
                 for i in range(pred_one_hot.shape[0]):
@@ -344,24 +336,30 @@ class ConVAE(object):
                 predicted_indices = pred_one_hot.argmax(dim=2)  # 处理后的索引 (0~16)
                 predicted_indices_original = predicted_indices + 2  # 恢复为原始索引 (2~18)
                 predicted_smiles = tokenizer.getSmiles(predicted_indices_original)
+
                 reconstruction_loss, kld_loss, cond_loss_mean = self.loss_per_sample(
                     pred_y, X, mu, logvar, predicted_smiles, enthalpy, lb, ub)
                 reconstruction_mean, kld_mean, cond_mean = reconstruction_loss.mean(), kld_loss.mean() * \
                                                            KLD_alpha, cond_loss_mean
-                if cond_mean != 0 and abs(cond_mean) < 10: # change to AND
-                    loss = reconstruction_mean + kld_mean + cond_mean
+                if cond_mean != 0 and abs(cond_mean) < 10:
+                    total_loss = reconstruction_mean + kld_mean + cond_mean
                 else:
-                    loss = reconstruction_mean + kld_mean
+                    total_loss = reconstruction_mean + kld_mean
+
                 encoderOptimizer.zero_grad()
                 decoderOptimizer.zero_grad()
-                torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 1)
-                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1)
-                loss.backward()
-                encoderOptimizer.step()
-                decoderOptimizer.step()
+                if nBatch != 1 and epoch != 1:
+                    torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 1)
+                    torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1)
+                    total_loss.backward()
+                    encoderOptimizer.step()
+                    decoderOptimizer.step()
+
                 reconstruction_loss_list.append(reconstruction_mean.item())
                 kld_loss_list.append(kld_mean.item())
                 cond_loss_list.append(cond_mean.item())
+                total_loss_list.append(total_loss.item())
+
                 accumulated_reconstruction_loss += reconstruction_mean.item()
                 accumulated_kld_loss += kld_mean.item()
                 accumulated_cond_loss += cond_mean.item()
@@ -376,15 +374,68 @@ class ConVAE(object):
                     kld_loss_list.clear()
                     cond_loss_list.clear()
                     if minloss is None:
-                        minloss = loss.item()
-                    elif loss.item() < minloss:
+                        minloss = total_loss.item()
+                    elif total_loss.item() < minloss:
                         self.encoder.saveState()
                         self.decoder.saveState()
-                        minloss = loss.item()
+                        minloss = total_loss.item()
             encoderScheduler.step()
             decoderScheduler.step()
+
+            # 计算 epoch 平均指标
+            # 转换为 CPU 张量并转换为 NumPy 数组
+            reconstruction_loss_list = [loss.cpu().numpy() if isinstance(loss, torch.Tensor) else loss for loss in
+                                        reconstruction_loss_list]
+            kld_loss_list = [loss.cpu().numpy() if isinstance(loss, torch.Tensor) else loss for loss in kld_loss_list]
+            cond_loss_list = [loss.cpu().numpy() if isinstance(loss, torch.Tensor) else loss for loss in cond_loss_list]
+            total_loss_list = [loss.cpu().numpy() if isinstance(loss, torch.Tensor) else loss for loss in
+                               total_loss_list]
+            quality_list = [quality.cpu().numpy() if isinstance(quality, torch.Tensor) else quality for quality in
+                            quality_list]
+            numValid_list = [numValid.cpu().numpy() if isinstance(numValid, torch.Tensor) else numValid for numValid in
+                             numValid_list]
+            avg_recon_loss = np.mean(reconstruction_loss_list)
+            avg_kld_loss = np.mean(kld_loss_list)
+            avg_cond_loss = np.mean(cond_loss_list)
+            avg_total_loss = np.mean(total_loss_list)
+            avg_quality = np.mean(quality_list)
+            avg_valid_rate = np.mean(numValid_list) / numSample
+
+            # 打印 epoch 总结
+            Enc_lr = encoderOptimizer.param_groups[0]['lr']
+            Dec_lr = decoderOptimizer.param_groups[0]['lr']
             print(
-                "[%s] Epoch %4d: Reconstruction_Loss= %.5e KLD_Loss= %.5e Condition_Loss=%.5e Quality= %3d/%3d Valid= %3d/%3d" % (
-                time.ctime(), epoch, accumulated_reconstruction_loss / nBatch, accumulated_kld_loss / nBatch,
-                accumulated_cond_loss / nBatch, sum(quality_list) / len(quality_list), self.decoder.maxLength,
-                sum(numValid_list) / len(numValid_list), numSample))
+                f"[{time.ctime()}] Epoch {epoch:4d}: "
+                f"Reconstruction_Loss= {avg_recon_loss:.5e} "
+                f"KLD_Loss= {avg_kld_loss:.5e} "
+                f"Condition_Loss= {avg_cond_loss:.5e} "
+                f"Total_Loss= {avg_total_loss:.5e} "
+                f"Quality= {avg_quality:.0f}/{self.decoder.maxLength} "
+                f"Valid= {avg_valid_rate * 100:.1f}% "
+                f"Enc_lr= {Enc_lr:.5e} "
+                f"Dec_lr= {Dec_lr:.5e} "
+            )
+
+            # 记录指标
+            metrics = {
+                'recon_loss': avg_recon_loss,
+                'kld_loss': avg_kld_loss,
+                'cond_loss': avg_cond_loss,
+                'total_loss': avg_total_loss,
+                'valid_rate': avg_valid_rate
+            }
+            logger.log_metrics(epoch, metrics)
+
+            # 定期生成图表
+            if epoch % 50 == 0:
+                logger.plot_losses()
+
+            if (avg_valid_rate > 0.25) and (scheduler_count == 0):
+                encoderOptimizer.param_groups[0]['lr'] = 1e-5
+                decoderOptimizer.param_groups[0]['lr'] = 1e-5
+                scheduler_count = 1
+            # print(
+            #     "[%s] Epoch %4d: Reconstruction_Loss= %.5e KLD_Loss= %.5e Condition_Loss=%.5e Quality= %3d/%3d Valid= %3d/%3d" % (
+            #     time.ctime(), epoch, accumulated_reconstruction_loss / nBatch, accumulated_kld_loss / nBatch,
+            #     accumulated_cond_loss / nBatch, sum(quality_list) / len(quality_list), self.decoder.maxLength,
+            #     sum(numValid_list) / len(numValid_list), numSample))
