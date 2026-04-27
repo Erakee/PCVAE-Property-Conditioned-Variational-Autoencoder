@@ -13,19 +13,19 @@ from datetime import datetime
 
 def main():
     model = 'cvae_dhr'
-    enthalpy = 'neg100_'
+    enthalpy = 'full_rand_'
     parser = argparse.ArgumentParser(description='Molecular Generation with CVAE')
     parser.add_argument('--random', action='store_true', help='Random generation')
     # parser.add_argument('--conditional', type=bool, default='True', help='Whether to generate conditional')
     parser.add_argument('--smiles', type=str, default='', help='Input SMILES for conditional generation')
     parser.add_argument('--enthalpy', type=float, default=None, help='Target enthalpy value')
-    parser.add_argument('--num_samples', type=int, default=50, help='Number of samples to generate')
+    parser.add_argument('--num_samples', type=int, default=100, help='Number of samples to generate')
     # parser.add_argument('--info_output', type=str, default='generate_smi/generated_info.txt', help='Output file path')
     # parser.add_argument('--ent_output', type=str, default='generate_smi/generated_enthalpy.txt', help='Output file path')
     # parser.add_argument('--output', type=str, default='generate_smi/generated_smiles.smi', help='Output file path')
-    parser.add_argument('--info_output', type=str, default=f'generate_smi/{model}/{enthalpy}NTO_generated_info.txt', help='Output file path')
-    parser.add_argument('--ent_output', type=str, default=f'generate_smi/{model}/{enthalpy}NTO_generated_enthalpy.txt', help='Output file path')
-    parser.add_argument('--output', type=str, default=f'generate_smi/{model}/{enthalpy}NTO_generated_smiles.smi', help='Output file path')
+    parser.add_argument('--info_output', type=str, default=f'generate_smi/{model}/{enthalpy}generated_info.txt', help='Output file path')
+    parser.add_argument('--ent_output', type=str, default=f'generate_smi/{model}/{enthalpy}generated_enthalpy.txt', help='Output file path')
+    parser.add_argument('--output', type=str, default=f'generate_smi/{model}/{enthalpy}generated_smiles.smi', help='Output file path')
     args = parser.parse_args()
     # 加载配置
     config = utils.p_cfg(model)
@@ -57,6 +57,7 @@ def main():
             latent_n_vec = torch.randn((nSample, vae_model.latent_dim), device=device)
             norm_n_h = torch.randn(nSample, device=device)
             X = torch.rand(nSample, maxLength, device=device)
+            mu_n = latent_n_vec
         else:
             if args.smiles: # 有SMILES enthalpy不限的情况
                 token_vector = tokenizer.tokenize([args.smiles], useTokenDict=True)[0]
@@ -90,7 +91,7 @@ def main():
                 norm_h_tensor = torch.tensor([norm_h], dtype=torch.float32, device=device)
                 norm_n_h = norm_h_tensor.unsqueeze(0).repeat(nSample, 1).squeeze(1)
             else:
-                norm_n_h = torch.rand(nSample)
+                norm_n_h = torch.rand(nSample, device=device)
                 h_tensor = torch.tensor(norm_n_h, dtype=torch.float32, device=device)
                 mu_n_prior, logvar_n_prior = vae_model.encoder.prior_block(h_tensor.unsqueeze(1))  #检查维度和上面的是不是一样！！！！！！！！！！！！！！！！！！！！！！！！！！！
 
@@ -186,3 +187,4 @@ if __name__ == "__main__":
 # CC1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]  TNT
 #TNB  --smiles C1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-] --enthalpy -8.89 wiki     -78.4 kJ/mol (crystalline solid); -13.4 kJ/mol (gas)
 #TATB --smiles C1(=C(C(=C(C(=C1[N+](=O)[O-])N)[N+](=O)[O-])N)[N+](=O)[O-])N --enthalpy -36.78  wiki
+# NTO --smiles C1(=NC(=O)NN1)[N+](=O)[O-] --enthalpy -100
