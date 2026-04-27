@@ -35,8 +35,11 @@ class TrainingLogger:
             'cond_loss', 'total_loss', 'valid_rate'
         ])
 
-        # 图表样式设置
-        plt.style.use('seaborn')
+        # 图表样式设置（兼容新旧版matplotlib）
+        try:
+            plt.style.use('seaborn-v0_8')
+        except OSError:
+            plt.style.use('seaborn')
         self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
 
     def log_metrics(self, epoch, metrics_dict):

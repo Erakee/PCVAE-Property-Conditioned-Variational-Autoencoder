@@ -50,9 +50,9 @@ def main():
         if_full_cond = (len(args.smiles) > 1) and (args.enthalpy is not None)
         nSample = args.num_samples
         x = torch.zeros(nSample, maxLength, config['vae_param']['num_vocabs'])
-        if args.enthalpy and (len(args.smiles) < 1):
+        if args.enthalpy is not None and (len(args.smiles) < 1):
             norm_h = (args.enthalpy - lb) / (ub - lb)
-            assert ((norm_h <= 1) and (norm_h > 0)), f'Given enthalpy is out of range:{lb}~{ub}.'
+            assert ((norm_h <= 1) and (norm_h >= 0)), f'Given enthalpy is out of range:{lb}~{ub}.'
             h_tensor = torch.tensor([norm_h], dtype=torch.float32, device=device)
             norm_h_tensor = torch.tensor([norm_h], dtype=torch.float32, device=device)
             norm_n_h = norm_h_tensor.unsqueeze(0).repeat(nSample, 1).squeeze(1)
@@ -65,6 +65,19 @@ def main():
                     pred_one_hot[i, j, pred_y_argmax[i, j]] = 1
             predicted_indices = pred_one_hot.argmax(dim=2)  # 处理后的索引 (0~16)
             predicted_indices_original = predicted_indices + 2  # 恢复为原始索引 (2~18)
+            predicted_smiles = tokenizer.getSmiles(predicted_indices_original)
+        else:
+            # 无条件随机生成
+            norm_n_h = torch.rand(nSample, device=device)
+            latent_vec = torch.randn((nSample, config['vae_param']['latent_dim']), device=device)
+            pred_y = vae_model.decoder(latent_vec, norm_n_h, None, freerun=True)
+            pred_one_hot = torch.zeros_like(x)
+            pred_y_argmax = torch.nn.functional.softmax(pred_y, dim=2).argmax(dim=2)
+            for i in range(pred_one_hot.shape[0]):
+                for j in range(pred_one_hot.shape[1]):
+                    pred_one_hot[i, j, pred_y_argmax[i, j]] = 1
+            predicted_indices = pred_one_hot.argmax(dim=2)
+            predicted_indices_original = predicted_indices + 2
             predicted_smiles = tokenizer.getSmiles(predicted_indices_original)
 
         # 验证有效性

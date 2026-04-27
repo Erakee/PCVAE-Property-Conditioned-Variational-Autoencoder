@@ -1,1 +1,51 @@
-/util/__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 生成物：SMILES / 焓值 / summary 等（generate_dhr.py 等脚本输出）
+generate_smi/
+
+# 由 util.utils 从 em_train.smi 自动构建，可删除后重新生成
+.tokenizer.pkl
+
+# 训练日志默认目录（CVAE_DHR.TrainingLogger 未指定 base_dir 时）
+experiments/
+
+# config.yaml 中的采样目录（若存在）
+sampled/
+target_sample/
+
+# 工具脚本产生的大量 xyz / 中间输出（保留源码即可）
+other_tool/smiles2xyz/outputxyz/
+other_tool/smiles2xyz/batch*/
+other_tool/smiles2xyz/*.xyz
+
+# Jupyter
+.ipynb_checkpoints/

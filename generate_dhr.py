@@ -1,190 +1,310 @@
+"""
+CVAE_DHR Molecular Generation
+==============================
+既可以作为 CLI 直接运行，也可以作为 Python 模块被 agent 调用：
+
+    from generate_dhr import generate_molecules
+    result = generate_molecules(enthalpy=-50.0, num_samples=100)
+    print(result['stats'])
+    print(result['valid_smiles'][:5])
+"""
+
 import argparse
+import json
 import os
-import sys
 import torch
-import numpy as np
 import model.CVAE_DHR as cvae
 from dataset.dataset import SmilesDictDataset
 from util.enthalpy_predictor import predict_enthalpy
-from util.tokens import getTokenizer  # 根据你的实际导入路径调整
 import util.utils as utils
 from datetime import datetime
 
+# =============================================================================
+# 集中配置区
+# =============================================================================
+GEN_CONFIG = {
+    'model':      'cvae_dhr',
+    'output_dir': 'generate_smi/cvae_dhr',
+    # 权重路径由 config.yaml 中 fname_enc/dec_params_CVAE_DHR 决定，无需在此修改
+}
+# =============================================================================
+
+
+# ── 文件名辅助 ────────────────────────────────────────────────────────────────
+
+def _fmt_float(val: float) -> str:
+    """将浮点数转换为文件名安全字符串（无 '-' 和 '.'）。
+    示例: -50.8 -> 'neg50p8'  |  52.0 -> '52p0'
+    """
+    sign = 'neg' if val < 0 else ''
+    int_part, dec_part = f'{abs(val):.1f}'.split('.')
+    return f'{sign}{int_part}p{dec_part}'
+
+
+def _build_output_paths(mode: str, num_samples: int,
+                        timestamp: str, output_dir: str) -> dict:
+    """根据生成模式构造文件名，仅含字母、数字和下划线。
+
+    目录结构:
+      {output_dir}/
+        {YYYYMMDD}/               ← 按日期自动分组
+          {mode}_n{N}_{HHMMSS}_{type}.{ext}
+
+    mode 取值:
+      rand            — 完全随机
+      h{val}          — 仅焓值条件
+      smi             — 仅 SMILES 条件
+      smi_h{val}      — SMILES + 焓值联合条件
+    """
+    date_str  = timestamp[:8]          # 'YYYYMMDD'
+    time_str  = timestamp[9:]          # 'HHMMSS'
+    dated_dir = os.path.join(output_dir, date_str)
+    os.makedirs(dated_dir, exist_ok=True)
+    base = f'{mode}_n{num_samples}_{time_str}'
+    return {
+        'smiles':   os.path.join(dated_dir, f'{base}_smiles.smi'),
+        'info':     os.path.join(dated_dir, f'{base}_info.txt'),
+        'enthalpy': os.path.join(dated_dir, f'{base}_enthalpy.txt'),
+        'summary':  os.path.join(dated_dir, f'{base}_summary.json'),
+    }
+
+
+def _mode_tag(smiles: str, enthalpy) -> str:
+    """根据条件类型返回模式标签字符串（文件名安全）。"""
+    has_smiles   = len(smiles) > 0
+    has_enthalpy = enthalpy is not None
+    if not has_smiles and not has_enthalpy:
+        return 'rand'
+    elif has_smiles and has_enthalpy:
+        return f'smi_h{_fmt_float(enthalpy)}'
+    elif has_smiles:
+        return 'smi'
+    else:
+        return f'h{_fmt_float(enthalpy)}'
+
+
+# ── 模型与推理辅助 ────────────────────────────────────────────────────────────
+
+def _load_model(cfg: dict, device):
+    """加载并返回已评估模式的 ConVAE 模型。"""
+    model = cvae.ConVAE(
+        **cfg['vae_param'],
+        encoder_state_fname=cfg['fname_vae_encoder_parameters'],
+        decoder_state_fname=cfg['fname_vae_decoder_parameters'],
+        device=device,
+    )
+    model.encoder.loadState()
+    model.decoder.loadState()
+    model.encoder.eval()
+    model.decoder.eval()
+    return model
+
+
+def _encode_smiles(smiles: str, tokenizer, maxLength: int, pad_idx: int,
+                   nSample: int, device):
+    """将单条 SMILES 编码为 token 索引张量并扩展到 nSample。"""
+    token_vec = tokenizer.tokenize([smiles], useTokenDict=True)[0]
+    num_vec   = tokenizer.getNumVector([token_vec], addStart=True, addEnd=True)[0]
+
+    if max(num_vec) >= tokenizer.getTokensSize():
+        print(f'[Warning] Input SMILES contains unknown tokens '
+              f'(max index {max(num_vec)} >= vocab size {tokenizer.getTokensSize()}).')
+
+    if len(num_vec) > maxLength:
+        num_vec = [num_vec[0]] + num_vec[1:-1][:maxLength - 2] + [num_vec[-1]]
+    else:
+        num_vec = num_vec + [pad_idx] * (maxLength - len(num_vec))
+
+    return (torch.tensor(num_vec, dtype=torch.long, device=device)
+            .unsqueeze(0).expand(nSample, -1).contiguous())
+
+
+# ── 核心生成函数（可供 agent 直接调用）────────────────────────────────────────
+
+def generate_molecules(
+    smiles: str = '',
+    enthalpy: float = None,
+    num_samples: int = 100,
+    output_dir: str = GEN_CONFIG['output_dir'],
+) -> dict:
+    """生成分子并返回结构化结果，同时将文件写入 output_dir。
+
+    Parameters
+    ----------
+    smiles : str
+        条件 SMILES 字符串，留空表示不使用结构条件。
+    enthalpy : float or None
+        目标生成焓（kJ/mol）。None 表示不使用焓值条件。
+    num_samples : int
+        尝试生成的样本数量。
+    output_dir : str
+        输出目录路径。
+
+    Returns
+    -------
+    dict with keys:
+        valid_smiles         : list[str]   — 有效 SMILES 列表
+        predicted_enthalpies : list[float] — 对应的预测焓值（kJ/mol）
+        output_paths         : dict        — 各输出文件的绝对路径
+        stats                : dict        — 统计信息（可直接被 agent 读取）
+    """
+    cfg    = utils.p_cfg(GEN_CONFIG['model'])
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    tokenizer  = utils.get_tokenizer()
+    maxLength  = cfg['maxLength']
+    pad_idx    = tokenizer.getTokensNum('<pad>')
+    latent_dim = cfg['vae_param']['latent_dim']
+
+    dataset = SmilesDictDataset(cfg['fname_dataset'], tokenizer, maxLength)
+    lb, ub  = dataset._getbound()
+
+    vae_model = _load_model(cfg, device)
+    alpha     = vae_model.encoder.alpha
+
+    has_smiles   = len(smiles) > 0
+    has_enthalpy = enthalpy is not None
+
+    # ── 构造潜变量与焓条件向量 ────────────────────────────────────────────────
+    with torch.no_grad():
+        if not has_smiles and not has_enthalpy:
+            mu_n     = torch.randn((num_samples, latent_dim), device=device)
+            norm_n_h = torch.rand(num_samples, device=device)
+            X        = torch.zeros((num_samples, maxLength), dtype=torch.long, device=device)
+
+        else:
+            if has_smiles:
+                X = _encode_smiles(smiles, tokenizer, maxLength, pad_idx, num_samples, device)
+                _, mu_n_x, logvar_n_x, _, _ = vae_model.encoder(
+                    X, torch.zeros(1, device=device), alpha=1)
+            else:
+                X          = torch.zeros((num_samples, maxLength), dtype=torch.long, device=device)
+                mu_n_x     = torch.randn((num_samples, latent_dim), device=device)
+                logvar_n_x = torch.zeros((num_samples, latent_dim), device=device)
+
+            if has_enthalpy:
+                norm_h = (enthalpy - lb) / (ub - lb)
+                if not (0 <= norm_h <= 1):
+                    raise ValueError(
+                        f'Enthalpy {enthalpy:.2f} is outside training range '
+                        f'[{lb:.2f}, {ub:.2f}] kJ/mol.')
+                h_t        = torch.tensor([norm_h], dtype=torch.float32, device=device)
+                mu_p, lv_p = vae_model.encoder.prior_block(h_t.unsqueeze(1))
+                mu_n_prior    = mu_p.expand(num_samples, -1).contiguous()
+                logvar_n_prior = lv_p.expand(num_samples, -1).contiguous()
+                norm_n_h   = h_t.expand(num_samples).contiguous()
+            else:
+                norm_n_h   = torch.rand(num_samples, device=device)
+                mu_n_prior, logvar_n_prior = vae_model.encoder.prior_block(
+                    norm_n_h.unsqueeze(1))
+
+            mu_n    = alpha * mu_n_x + (1 - alpha) * mu_n_prior
+            logvar_n = 0.5 * (alpha * logvar_n_x + (1 - alpha) * logvar_n_prior)
+            mu_n    = vae_model.encoder.reparameterize(mu_n, logvar_n)
+
+        # ── 解码并验证 ────────────────────────────────────────────────────────
+        y            = vae_model.decoder(mu_n, norm_n_h, X, freerun=True).cpu()
+        smiles_all   = tokenizer.getSmiles(y)
+        valid_smiles = [sm for sm in smiles_all if utils.isValidSmiles(sm)]
+
+    pred_enthalpies = [predict_enthalpy(sm) for sm in valid_smiles]
+
+    # ── 构造输出路径并写文件 ──────────────────────────────────────────────────
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    mode      = _mode_tag(smiles, enthalpy)
+    paths     = _build_output_paths(mode, num_samples, timestamp, output_dir)
+    paths     = {k: os.path.abspath(v) for k, v in paths.items()}
+
+    stats = {
+        'timestamp':          timestamp,
+        'mode':               mode,
+        'smiles_input':       smiles or None,
+        'enthalpy_target':    enthalpy,
+        'n_attempted':        num_samples,
+        'n_valid':            len(valid_smiles),
+        'valid_rate':         round(len(valid_smiles) / num_samples, 4) if num_samples else 0.0,
+        'device':             str(device),
+        'output_paths':       paths,
+    }
+
+    _write_outputs(paths, valid_smiles, pred_enthalpies, stats)
+
+    return {
+        'valid_smiles':         valid_smiles,
+        'predicted_enthalpies': pred_enthalpies,
+        'output_paths':         paths,
+        'stats':                stats,
+    }
+
+
+def _write_outputs(paths: dict, valid_smiles: list,
+                   pred_enthalpies: list, stats: dict):
+    """将三份数据文件和一份 JSON summary 写入磁盘。"""
+    # smiles 文件：每行一个有效 SMILES
+    with open(paths['smiles'], 'w', encoding='utf-8') as f:
+        f.write('\n'.join(valid_smiles) + ('\n' if valid_smiles else ''))
+
+    # info 文件：每行 "SMILES,predicted_enthalpy"
+    with open(paths['info'], 'w', encoding='utf-8') as f:
+        for smi, ent in zip(valid_smiles, pred_enthalpies):
+            f.write(f'{smi},{ent:.4f}\n')
+
+    # enthalpy 文件：每行一个预测焓值
+    with open(paths['enthalpy'], 'w', encoding='utf-8') as f:
+        for ent in pred_enthalpies:
+            f.write(f'{ent:.4f}\n')
+
+    # summary JSON：结构化元数据，供 agent 直接解析
+    with open(paths['summary'], 'w', encoding='utf-8') as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+
+    valid_rate_pct = stats['valid_rate'] * 100
+    print(f"[{stats['timestamp']}] mode={stats['mode']}  "
+          f"valid={stats['n_valid']}/{stats['n_attempted']} ({valid_rate_pct:.1f}%)")
+    for key, path in paths.items():
+        print(f"  {key:<10} -> {path}")
+
+
+# ── CLI 入口 ──────────────────────────────────────────────────────────────────
 
 def main():
-    model = 'cvae_dhr'
-    enthalpy = 'full_rand_'
-    parser = argparse.ArgumentParser(description='Molecular Generation with CVAE')
-    parser.add_argument('--random', action='store_true', help='Random generation')
-    # parser.add_argument('--conditional', type=bool, default='True', help='Whether to generate conditional')
-    parser.add_argument('--smiles', type=str, default='', help='Input SMILES for conditional generation')
-    parser.add_argument('--enthalpy', type=float, default=None, help='Target enthalpy value')
-    parser.add_argument('--num_samples', type=int, default=100, help='Number of samples to generate')
-    # parser.add_argument('--info_output', type=str, default='generate_smi/generated_info.txt', help='Output file path')
-    # parser.add_argument('--ent_output', type=str, default='generate_smi/generated_enthalpy.txt', help='Output file path')
-    # parser.add_argument('--output', type=str, default='generate_smi/generated_smiles.smi', help='Output file path')
-    parser.add_argument('--info_output', type=str, default=f'generate_smi/{model}/{enthalpy}generated_info.txt', help='Output file path')
-    parser.add_argument('--ent_output', type=str, default=f'generate_smi/{model}/{enthalpy}generated_enthalpy.txt', help='Output file path')
-    parser.add_argument('--output', type=str, default=f'generate_smi/{model}/{enthalpy}generated_smiles.smi', help='Output file path')
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('--smiles',      type=str,   default='',
+                        help='Scaffold SMILES for structure-conditioned generation')
+    parser.add_argument('--enthalpy',    type=float, default=None,
+                        help='Target enthalpy (kJ/mol) for enthalpy-conditioned generation')
+    parser.add_argument('--num_samples', type=int,   default=100,
+                        help='Number of molecules to attempt (default: 100)')
+    parser.add_argument('--output_dir',  type=str,   default=GEN_CONFIG['output_dir'],
+                        help=f'Output directory (default: {GEN_CONFIG["output_dir"]})')
     args = parser.parse_args()
-    # 加载配置
-    config = utils.p_cfg(model)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = utils.get_tokenizer()
-    maxLength = config['maxLength']
-    pad_idx = tokenizer.getTokensNum('<pad>')
-    smilesDataset = SmilesDictDataset(config['fname_dataset'], tokenizer, config['maxLength'])
-    lb, ub = smilesDataset._getbound()
-    vae_model = cvae.ConVAE(**config['vae_param'],
-                            encoder_state_fname=config['fname_vae_encoder_parameters'],
-                            decoder_state_fname=config['fname_vae_decoder_parameters'],
-                            device=device)
-    vae_model.encoder.loadState()
-    vae_model.decoder.loadState()
-    vae_model.encoder.eval()
-    vae_model.decoder.eval()
-    alpha = vae_model.encoder.alpha
 
-    # 生成逻辑
-    with torch.no_grad():
-        mu_conditions = []
-        # 明确条件类型：是否同时有SMILES和焓值
-        has_smiles = len(args.smiles) > 0
-        has_enthalpy = args.enthalpy is not None
-        nSample = args.num_samples  # 明确样本数
-        if (len(args.smiles) < 1) and (args.enthalpy is None):
-            completely_rand = True
-            latent_n_vec = torch.randn((nSample, vae_model.latent_dim), device=device)
-            norm_n_h = torch.randn(nSample, device=device)
-            X = torch.rand(nSample, maxLength, device=device)
-            mu_n = latent_n_vec
-        else:
-            if args.smiles: # 有SMILES enthalpy不限的情况
-                token_vector = tokenizer.tokenize([args.smiles], useTokenDict=True)[0]
-                num_vector = tokenizer.getNumVector([token_vector], addStart=True, addEnd=True)[0]
-                if max(num_vector) >= tokenizer.getTokensSize():
-                    print(f"Warning: token index {max(num_vector)} exceeds vocabulary size {tokenizer.getTokensSize()}")
-                # 截断/填充到 maxLength
-                if len(num_vector) > maxLength:
-                    truncated = [num_vector[0]] + num_vector[1:-1][:maxLength - 2] + [num_vector[-1]]
-                    num_vector = truncated
-                else:
-                    padding = [pad_idx] * (maxLength - len(num_vector))
-                    num_vector = num_vector + padding
-                X = torch.tensor(num_vector, dtype=torch.long, device=device).unsqueeze(0).expand(nSample, -1)
-                latent_x, mu_x, logvar_x,_,_ = vae_model.encoder(X, torch.zeros(1, device=device), alpha=1)
-                mu_n_x = mu_x
-                logvar_n_x = logvar_x
-                # mu_conditions.append((0.6, mu_x))
-            elif args.enthalpy: # 无SMILES 有enthalpy的情况
-                X = torch.rand(nSample, maxLength, device=device)
-                mu_n_x = torch.randn((nSample, config['vae_param']['latent_dim']), device=device)
+    generate_molecules(
+        smiles=args.smiles,
+        enthalpy=args.enthalpy,
+        num_samples=args.num_samples,
+        output_dir=args.output_dir,
+    )
 
 
-            if args.enthalpy is not None: # 有SMILES 有 Enthalpy的情况
-                norm_h = (args.enthalpy - lb) / (ub - lb)
-                assert ((norm_h<= 1) and (norm_h > 0)), f'Given enthalpy is out of range:{lb}~{ub}.'
-                h_tensor = torch.tensor([norm_h], dtype=torch.float32, device=device)
-                mu_prior, logvar_prior = vae_model.encoder.prior_block(h_tensor.unsqueeze(1))
-                mu_n_prior = mu_prior.repeat(nSample, 1)
-                logvar_n_prior = logvar_prior.repeat(nSample, 1)
-                norm_h_tensor = torch.tensor([norm_h], dtype=torch.float32, device=device)
-                norm_n_h = norm_h_tensor.unsqueeze(0).repeat(nSample, 1).squeeze(1)
-            else:
-                norm_n_h = torch.rand(nSample, device=device)
-                h_tensor = torch.tensor(norm_n_h, dtype=torch.float32, device=device)
-                mu_n_prior, logvar_n_prior = vae_model.encoder.prior_block(h_tensor.unsqueeze(1))  #检查维度和上面的是不是一样！！！！！！！！！！！！！！！！！！！！！！！！！！！
-
-            mu_n = alpha * mu_n_x + (1 - alpha) * mu_n_prior
-            logvar_n = 0.5 * (alpha * logvar_n_x + (1 - alpha) * logvar_n_prior)
-            latent_n_x = vae_model.encoder.reparameterize(mu_n, logvar_n)
-
-        # 使用decoder进行生成
-        y = vae_model.decoder(mu_n, norm_n_h, X, freerun=True).cpu()#也要改，X分单条件和多条件的，有无给定smiles影响X维度
-        # 将decoder输出还原成smiles
-        smilesStrs = tokenizer.getSmiles(y)
-        # 验证有效性
-        validSmilesStrs = [sm for sm in smilesStrs if utils.isValidSmiles(sm)]
-
-        if args.enthalpy is not None:
-            gen_enthalpy = []
-            for smi in validSmilesStrs:
-                gen_enthalpy.append(predict_enthalpy(smi))
-            # 将有效分子和对应的生成焓组合成字符串列表
-            output_lines = []
-            output_ents = []
-            for smi, enthalpy in zip(validSmilesStrs, gen_enthalpy):
-                output_lines.append(f"{smi},{enthalpy}")
-                output_ents.append(f"{enthalpy}")
-        else:
-            gen_enthalpy = []
-            output_lines = []
-            for smi in validSmilesStrs:
-                gen_enthalpy.append(predict_enthalpy(smi))
-
-            output_ents = []
-            for smi, enthalpy in zip(validSmilesStrs, gen_enthalpy):
-                output_lines.append(f"{smi},{enthalpy}")
-                output_ents.append(f"{enthalpy}")
-
-        # 准备三份内容
-        smiles_lines = validSmilesStrs
-        info_lines = [f"{smi},{enthalpy}" for smi, enthalpy in zip(validSmilesStrs, gen_enthalpy)]
-        enthalpy_lines = [f"{enthalpy}" for enthalpy in gen_enthalpy]
-
-        # 添加时间和统计
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stat_info = f"成功生成 {len(validSmilesStrs)} 个有效分子，有效率 {len(validSmilesStrs) / args.num_samples:.1%}"
-
-        # 写 info（SMILES + enthalpy）
-        with open(args.info_output, 'a') as f:
-            f.write(f'\n{current_time}\n')
-            f.write('\n'.join(info_lines) + '\n')
-            f.write(stat_info + '\n')
-
-        # 写 smiles（只写 smiles）
-        with open(args.output, 'a') as f:
-            f.write('\n' + '\n'.join(smiles_lines) + '\n')
-
-        # 写 enthalpy（只写 enthalpy）
-        with open(args.ent_output, 'a') as f:
-            f.write(f'\n{current_time}\n')
-            f.write('\n'.join(enthalpy_lines) + '\n')
-            f.write(f"{stat_info}--enthalpy setting={args.enthalpy}\n")
-        # # 获取当前时间
-        # current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # # 将当前时间添加到输出内容的开头
-        # output_lines.insert(0, current_time)
-        # output_ents.insert(0, current_time)
-        # stat_info = f"成功生成 {len(validSmilesStrs)} 个有效分子，有效率 {len(validSmilesStrs) / args.num_samples:.1%}"
-        # # 将统计信息添加到输出内容中
-        # output_lines.append(stat_info)
-        # output_ents.append(f"{stat_info}--enthalpy setting={args.enthalpy}\n")
-
-        # with open(args.info_output, 'a') as f:
-        #     f.write('\n')
-        #     f.write('\n'.join(output_lines))
-        #     f.write('\n')
-        # with open(args.output, 'a') as f:
-        #     f.write('\n')
-        #     f.write('\n'.join(validSmilesStrs))
-        #     f.write('\n')
-        # with open(args.ent_output, 'a') as f:
-        #     f.write('\n')
-        #     f.write('\n'.join(output_ents))
-        #     f.write('\n')
-        # 写 info（带 enthalpy 的，带时间和统计）
-
-
-        print(stat_info)
-        print(f"结果已保存至 {os.path.abspath(args.output)}")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-# --smiles C1N(CN(CN1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-] --enthalpy 52.8  #  RDX
-# --smiles Cc1c(cc(cc1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-] --enthalpy −16.01  # TNT
-# CC1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]  TNT
-#TNB  --smiles C1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-] --enthalpy -8.89 wiki     -78.4 kJ/mol (crystalline solid); -13.4 kJ/mol (gas)
-#TATB --smiles C1(=C(C(=C(C(=C1[N+](=O)[O-])N)[N+](=O)[O-])N)[N+](=O)[O-])N --enthalpy -36.78  wiki
-# NTO --smiles C1(=NC(=O)NN1)[N+](=O)[O-] --enthalpy -100
+
+# ── 常用示例（直接复制到命令行）──────────────────────────────────────────────
+# 完全随机:
+#   python generate_dhr.py --num_samples 500
+# 仅焓值条件:
+#   python generate_dhr.py --enthalpy -50.0 --num_samples 200
+# RDX (SMILES + 焓值):
+#   python generate_dhr.py --smiles "C1N(CN(CN1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]" --enthalpy 52.8
+# TNT:
+#   python generate_dhr.py --smiles "CC1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]" --enthalpy -16.01
+# TNB:
+#   python generate_dhr.py --smiles "C1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]" --enthalpy -8.89
+# TATB:
+#   python generate_dhr.py --smiles "C1(=C(C(=C(C(=C1[N+](=O)[O-])N)[N+](=O)[O-])N)[N+](=O)[O-])N" --enthalpy -36.78
+# NTO:
+#   python generate_dhr.py --smiles "C1(=NC(=O)NN1)[N+](=O)[O-]" --enthalpy -100

@@ -172,10 +172,11 @@ def predict_enthalpy(smiles_str):
         return pred.item()  # Return the predicted enthalpy value
 
 
-# Example usage:
-smiles_exp = '[O-][N+](=O)C1=NNC(=O)N1'  # 单个字符会报错，如'C'
-enthalpy = predict_enthalpy(smiles_exp)
-print(f"Predicted Enthalpy: {enthalpy}")
+if __name__ == '__main__':
+    # Example usage:
+    smiles_exp = '[O-][N+](=O)C1=NNC(=O)N1'  # 单个字符会报错，如'C'
+    enthalpy = predict_enthalpy(smiles_exp)
+    print(f"Predicted Enthalpy: {enthalpy}")
 
  # NTO pred 4 C1(=NC(=O)NN1)[N+](=O)[O-]
  # TNB -0.6554650664329529 C1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]

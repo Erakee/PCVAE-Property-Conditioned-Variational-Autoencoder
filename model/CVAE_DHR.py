@@ -35,8 +35,11 @@ class TrainingLogger:
             'cond_loss', 'total_loss', 'valid_rate'
         ])
 
-        # 图表样式设置
-        plt.style.use('seaborn')
+        # 图表样式设置（兼容新旧版matplotlib）
+        try:
+            plt.style.use('seaborn-v0_8')
+        except OSError:
+            plt.style.use('seaborn')
         self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
 
     def log_metrics(self, epoch, metrics_dict):
@@ -477,12 +480,12 @@ class ConVAE(object):
                 # 反向传播
                 encoderOptimizer.zero_grad()
                 decoderOptimizer.zero_grad()
-                if nBatch != 1 and epoch != 1:
+                total_loss.backward()
+                if not (nBatch == 1 and epoch == 1):  # 跳过第一个batch的梯度裁剪，避免初始化噪声
                     torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 1)
                     torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1)
-                    total_loss.backward()
-                    encoderOptimizer.step()
-                    decoderOptimizer.step()
+                encoderOptimizer.step()
+                decoderOptimizer.step()
 
                 # 记录损失
                 reconstruction_loss_list.append(reconstruction_loss.item())
