@@ -1,0 +1,11 @@
+# pcvae_tool runtime dependencies
+# (Tested on Python 3.8; PyTorch / PyG versions follow the parent project.)
+
+torch>=1.13
+torch-geometric>=2.3
+torch-scatter
+
+numpy
+pandas
+PyYAML
+rdkit

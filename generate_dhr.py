@@ -134,7 +134,7 @@ def generate_molecules(
     smiles : str
         条件 SMILES 字符串，留空表示不使用结构条件。
     enthalpy : float or None
-        目标生成焓（kJ/mol）。None 表示不使用焓值条件。
+        目标生成焓（kcal/mol）。None 表示不使用焓值条件。
     num_samples : int
         尝试生成的样本数量。
     output_dir : str
@@ -144,7 +144,7 @@ def generate_molecules(
     -------
     dict with keys:
         valid_smiles         : list[str]   — 有效 SMILES 列表
-        predicted_enthalpies : list[float] — 对应的预测焓值（kJ/mol）
+        predicted_enthalpies : list[float] — 对应的预测焓值（kcal/mol）
         output_paths         : dict        — 各输出文件的绝对路径
         stats                : dict        — 统计信息（可直接被 agent 读取）
     """
@@ -187,7 +187,7 @@ def generate_molecules(
                 if not (0 <= norm_h <= 1):
                     raise ValueError(
                         f'Enthalpy {enthalpy:.2f} is outside training range '
-                        f'[{lb:.2f}, {ub:.2f}] kJ/mol.')
+                        f'[{lb:.2f}, {ub:.2f}] kcal/mol.')
                 h_t        = torch.tensor([norm_h], dtype=torch.float32, device=device)
                 mu_p, lv_p = vae_model.encoder.prior_block(h_t.unsqueeze(1))
                 mu_n_prior    = mu_p.expand(num_samples, -1).contiguous()
@@ -275,7 +275,7 @@ def main():
     parser.add_argument('--smiles',      type=str,   default='',
                         help='Scaffold SMILES for structure-conditioned generation')
     parser.add_argument('--enthalpy',    type=float, default=None,
-                        help='Target enthalpy (kJ/mol) for enthalpy-conditioned generation')
+                        help='Target enthalpy (kcal/mol) for enthalpy-conditioned generation')
     parser.add_argument('--num_samples', type=int,   default=100,
                         help='Number of molecules to attempt (default: 100)')
     parser.add_argument('--output_dir',  type=str,   default=GEN_CONFIG['output_dir'],

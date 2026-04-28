@@ -49,3 +49,7 @@ other_tool/smiles2xyz/*.xyz
 
 # Jupyter
 .ipynb_checkpoints/
+
+# pcvae_tool 自带的运行产物（权重/缓存/输出）
+pcvae_tool/outputs/
+pcvae_tool/data/.tokenizer.pkl
