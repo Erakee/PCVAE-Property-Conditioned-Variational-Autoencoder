@@ -191,6 +191,84 @@ class PCVAEClient:
                           '--enthalpy', str(enthalpy),
                           *self._gen_args(num_samples, save, output_dir)])
 
+    # ── SMILES 工具 ───────────────────────────────────────────────────────────
+
+    def smiles_validate(self, smiles: str) -> dict:
+        """验证单个 SMILES。返回 {smiles, valid, reason}。"""
+        return self._run(['smiles_validate', '--smiles', smiles])
+
+    def smiles_batch_validate(self, smiles_list: Iterable[str]) -> dict:
+        """批量验证 SMILES，返回有效/无效分组。"""
+        return self._run(['smiles_batch_validate', '--smiles', *list(smiles_list)])
+
+    def smiles_canonicalize(self, smiles: str) -> dict:
+        """规范化单个 SMILES。返回 {smiles_input, smiles_canonical, valid}。"""
+        return self._run(['smiles_canonicalize', '--smiles', smiles])
+
+    def smiles_batch_canonicalize(self, smiles_list: Iterable[str]) -> dict:
+        """批量规范化 SMILES，返回规范列表及统计。"""
+        return self._run(['smiles_batch_canonicalize', '--smiles', *list(smiles_list)])
+
+    def smiles_properties(self, smiles: str) -> dict:
+        """获取单个分子属性（分子式、分子量、环数、元素等）。"""
+        return self._run(['smiles_properties', '--smiles', smiles])
+
+    def smiles_batch_properties(self, smiles_list: Iterable[str],
+                                keep_invalid: bool = False) -> dict:
+        """批量计算分子属性，默认跳过无效 SMILES。"""
+        args = ['smiles_batch_properties', '--smiles', *list(smiles_list)]
+        if keep_invalid:
+            args.append('--keep_invalid')
+        return self._run(args)
+
+    def smiles_deduplicate(self, smiles_list: Iterable[str],
+                           keep_invalid: bool = False) -> dict:
+        """按规范 SMILES 对列表去重，返回去重后列表及统计。"""
+        args = ['smiles_deduplicate', '--smiles', *list(smiles_list)]
+        if keep_invalid:
+            args.append('--keep_invalid')
+        return self._run(args)
+
+    # ── 相似度工具 ────────────────────────────────────────────────────────────
+
+    def tanimoto(self, smiles_a: str, smiles_b: str) -> dict:
+        """计算两个分子的 Tanimoto 相似度（ECFP4）。"""
+        return self._run(['tanimoto', '--smiles_a', smiles_a, '--smiles_b', smiles_b])
+
+    def most_similar(self, query: str, smiles_list: Iterable[str],
+                     top_n: int = 5) -> dict:
+        """从列表中找出与 query 最相似的 top_n 个分子（降序）。"""
+        return self._run(['most_similar',
+                          '--query', query,
+                          '--smiles', *list(smiles_list),
+                          '--top_n', str(top_n)])
+
+    def similarity_matrix(self, smiles_list: Iterable[str]) -> dict:
+        """计算列表内 N×N Tanimoto 相似度矩阵（建议 ≤200 个分子）。"""
+        return self._run(['similarity_matrix', '--smiles', *list(smiles_list)])
+
+    def diversity_score(self, smiles_list: Iterable[str]) -> dict:
+        """计算列表内部多样性（0~1，越高越多样）。"""
+        return self._run(['diversity_score', '--smiles', *list(smiles_list)])
+
+    def novelty_score(self, generated: Iterable[str], reference: Iterable[str],
+                      threshold: float = 0.4) -> dict:
+        """计算生成集对参考集的新颖性（最大相似度 < threshold 的比例）。"""
+        return self._run(['novelty_score',
+                          '--generated', *list(generated),
+                          '--reference', *list(reference),
+                          '--threshold', str(threshold)])
+
+    def filter_by_similarity(self, smiles_list: Iterable[str], reference: str,
+                              min_sim: float = 0.0,
+                              max_sim: float = 1.0) -> dict:
+        """保留与参考分子相似度在 [min_sim, max_sim] 内的分子。"""
+        return self._run(['filter_by_similarity',
+                          '--smiles',    *list(smiles_list),
+                          '--reference', reference,
+                          '--min_sim',   str(min_sim),
+                          '--max_sim',   str(max_sim)])
+
 
 if __name__ == '__main__':
     print('This module is a client. Import PCVAEClient and call its methods.',
