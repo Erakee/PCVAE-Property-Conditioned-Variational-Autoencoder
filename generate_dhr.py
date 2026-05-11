@@ -15,19 +15,17 @@ import os
 import torch
 import model.CVAE_DHR as cvae
 from dataset.dataset import SmilesDictDataset
+from util.config_loader import load_training_config
+from util.checkpoint_paths import (
+    attach_checkpoint_weights,
+    default_generation_output_dir,
+    resolve_generation_checkpoint,
+)
 from util.enthalpy_predictor import predict_enthalpy
 import util.utils as utils
 from datetime import datetime
 
-# =============================================================================
-# 集中配置区
-# =============================================================================
-GEN_CONFIG = {
-    'model':      'cvae_dhr',
-    'output_dir': 'generate_smi/cvae_dhr',
-    # 权重路径由 config.yaml 中 fname_enc/dec_params_CVAE_DHR 决定，无需在此修改
-}
-# =============================================================================
+GEN_MODEL_KEY = 'cvae_dhr'
 
 
 # ── 文件名辅助 ────────────────────────────────────────────────────────────────
@@ -86,7 +84,7 @@ def _mode_tag(smiles: str, enthalpy) -> str:
 # ── 模型与推理辅助 ────────────────────────────────────────────────────────────
 
 def _load_model(cfg: dict, device):
-    """加载并返回已评估模式的 ConVAE 模型。"""
+    """加载并返回已评估模式的 ConVAE 模型（权重路径来自 cfg）。"""
     model = cvae.ConVAE(
         **cfg['vae_param'],
         encoder_state_fname=cfg['fname_vae_encoder_parameters'],
@@ -125,7 +123,10 @@ def generate_molecules(
     smiles: str = '',
     enthalpy: float = None,
     num_samples: int = 100,
-    output_dir: str = GEN_CONFIG['output_dir'],
+    output_dir: str = None,
+    *,
+    checkpoint_dir: str = None,
+    config_path: str = None,
 ) -> dict:
     """生成分子并返回结构化结果，同时将文件写入 output_dir。
 
@@ -137,8 +138,12 @@ def generate_molecules(
         目标生成焓（kcal/mol）。None 表示不使用焓值条件。
     num_samples : int
         尝试生成的样本数量。
-    output_dir : str
-        输出目录路径。
+    output_dir : str or None
+        输出根路径；默认来自 ``config.yaml`` 的 ``generation_output_root/cvae_dhr``。
+    checkpoint_dir : str or None
+        含 ``encoder.pt`` / ``decoder.pt`` 的目录，或 ``checkpoint_aliases`` 中的别名。
+    config_path : str or None
+        YAML 路径；默认仓库根目录 ``config.yaml``。
 
     Returns
     -------
@@ -148,16 +153,22 @@ def generate_molecules(
         output_paths         : dict        — 各输出文件的绝对路径
         stats                : dict        — 统计信息（可直接被 agent 读取）
     """
-    cfg    = utils.p_cfg(GEN_CONFIG['model'])
+    cfg = load_training_config(config_path, model='cvae_dhr')
+    ckpt = resolve_generation_checkpoint(cfg, GEN_MODEL_KEY, checkpoint_dir)
+    cfg = attach_checkpoint_weights(cfg, ckpt)
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    tokenizer  = utils.get_tokenizer()
+    tokenizer = utils.get_tokenizer(model='cvae_dhr')
     maxLength  = cfg['maxLength']
     pad_idx    = tokenizer.getTokensNum('<pad>')
     latent_dim = cfg['vae_param']['latent_dim']
 
     dataset = SmilesDictDataset(cfg['fname_dataset'], tokenizer, maxLength)
     lb, ub  = dataset._getbound()
+
+    if output_dir is None:
+        output_dir = default_generation_output_dir(cfg, GEN_MODEL_KEY)
 
     vae_model = _load_model(cfg, device)
     alpha     = vae_model.encoder.alpha
@@ -278,8 +289,12 @@ def main():
                         help='Target enthalpy (kcal/mol) for enthalpy-conditioned generation')
     parser.add_argument('--num_samples', type=int,   default=100,
                         help='Number of molecules to attempt (default: 100)')
-    parser.add_argument('--output_dir',  type=str,   default=GEN_CONFIG['output_dir'],
-                        help=f'Output directory (default: {GEN_CONFIG["output_dir"]})')
+    parser.add_argument('--config', type=str, default=None,
+                        help='YAML config (default: <repo>/config.yaml)')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Checkpoint dir, path under root_path, or checkpoint_aliases key')
+    parser.add_argument('--output_dir',  type=str,   default=None,
+                        help='Output root (default: generation_output_root/cvae_dhr from config)')
     args = parser.parse_args()
 
     generate_molecules(
@@ -287,6 +302,8 @@ def main():
         enthalpy=args.enthalpy,
         num_samples=args.num_samples,
         output_dir=args.output_dir,
+        checkpoint_dir=args.checkpoint,
+        config_path=args.config,
     )
 
 

@@ -5,31 +5,52 @@ import torch
 import numpy as np
 import model.CVAE_HC_SEED as cvae
 from dataset.dataset import SmilesDictDataset
+from util.config_loader import load_training_config
+from util.checkpoint_paths import (
+    attach_checkpoint_weights,
+    default_generation_output_dir,
+    resolve_generation_checkpoint,
+)
 from util.enthalpy_predictor import predict_enthalpy
-from util.tokens import getTokenizer  # 根据你的实际导入路径调整
 import util.utils as utils
 from datetime import datetime
 
 
 def main():
-    model = 'cvae_hc'
-    parser = argparse.ArgumentParser(description='Molecular Generation with CVAE')
+    model_key = 'cvae_hc'
+    parser = argparse.ArgumentParser(description='Molecular Generation with CVAE-HC')
     parser.add_argument('--random', action='store_true', help='Random generation')
-    # parser.add_argument('--conditional', type=bool, default='True', help='Whether to generate conditional')
     parser.add_argument('--smiles', type=str, default='', help='Input SMILES for conditional generation')
     parser.add_argument('--enthalpy', type=float, default=None, help='Target enthalpy value')
     parser.add_argument('--num_samples', type=int, default=200, help='Number of samples to generate')
-    # parser.add_argument('--info_output', type=str, default='generate_smi/generated_info.txt', help='Output file path')
-    # parser.add_argument('--ent_output', type=str, default='generate_smi/generated_enthalpy.txt', help='Output file path')
-    # parser.add_argument('--output', type=str, default='generate_smi/generated_smiles.smi', help='Output file path')
-    parser.add_argument('--info_output', type=str, default=f'generate_smi/{model}/generated_info.txt', help='Output file path')
-    parser.add_argument('--ent_output', type=str, default=f'generate_smi/{model}/generated_enthalpy.txt', help='Output file path')
-    parser.add_argument('--output', type=str, default=f'generate_smi/{model}/generated_smiles.smi', help='Output file path')
+    parser.add_argument('--config', type=str, default=None,
+                        help='YAML config (default: <repo>/config.yaml)')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Checkpoint dir, path under root_path, or checkpoint_aliases key')
+    parser.add_argument('--info_output', type=str, default=None, help='Output info path')
+    parser.add_argument('--ent_output', type=str, default=None, help='Output enthalpy path')
+    parser.add_argument('--output', type=str, default=None, help='Output SMILES path')
     args = parser.parse_args()
-    # 加载配置
-    config = utils.p_cfg(model)
+
+    cfg_base = load_training_config(args.config, model=model_key)
+    ckpt = resolve_generation_checkpoint(cfg_base, model_key, args.checkpoint)
+    config = attach_checkpoint_weights(cfg_base, ckpt)
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = utils.get_tokenizer()
+    tokenizer = utils.ori_get_tokenizer(model=model_key)
+
+    out_base = default_generation_output_dir(config, model_key)
+    os.makedirs(out_base, exist_ok=True)
+    if args.output is None:
+        args.output = os.path.join(out_base, 'generated_smiles.smi')
+    if args.info_output is None:
+        args.info_output = os.path.join(out_base, 'generated_info.txt')
+    if args.ent_output is None:
+        args.ent_output = os.path.join(out_base, 'generated_enthalpy.txt')
+    for p in (args.output, args.info_output, args.ent_output):
+        d = os.path.dirname(os.path.abspath(p))
+        if d:
+            os.makedirs(d, exist_ok=True)
     maxLength = config['maxLength']
     pad_idx = tokenizer.getTokensNum('<pad>')
     smilesDataset = SmilesDictDataset(config['fname_dataset'], tokenizer, config['maxLength'])

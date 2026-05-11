@@ -294,7 +294,7 @@ class ConVAE(object):
             normed_valid_enthalpy_tensor = (valid_enthalpy_tensor - lb) / (ub - lb)  # Reverse normalization
             cond_loss_mean = torch.nn.functional.mse_loss(normed_valid_enthalpy_tensor, gt_mask_enthalpy_tensor)  # 只计算有效样本的损失
         else:
-            cond_loss_mean = torch.tensor(0.0, device=self.device)  # 如果没有有效样本，返回1
+            cond_loss_mean = torch.tensor(1.0, device=self.device)  # 如果没有有效样本，返回1作为惩罚
 
         return cond_loss_mean  # loss_per_sample_tensor, predicted_enthalpy_tensor, valid_enthalpy_tensor
 
@@ -351,12 +351,12 @@ class ConVAE(object):
 
                 encoderOptimizer.zero_grad()
                 decoderOptimizer.zero_grad()
-                if nBatch != 1 and epoch != 1:
+                total_loss.backward()
+                if not (nBatch == 1 and epoch == 1):  # 仅跳过首个epoch首个batch的梯度裁剪，backward和optimizer始终执行
                     torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 1)
                     torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1)
-                    total_loss.backward()
-                    encoderOptimizer.step()
-                    decoderOptimizer.step()
+                encoderOptimizer.step()
+                decoderOptimizer.step()
 
                 reconstruction_loss_list.append(reconstruction_mean.item())
                 kld_loss_list.append(kld_mean.item())
