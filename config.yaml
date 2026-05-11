@@ -1,5 +1,6 @@
 ---
- root_path: 'D:/Project/EVAE_paper/'
+ # Project root: resolved relative to this YAML file (keep config.yaml in repo root).
+ root_path: '.'
  working_dir: '.'
  fname_dataset: 'data/em_train.csv'
  token_file: 'data/em_train.smi'
@@ -13,6 +14,26 @@
  fname_dec_params_CVAE_DHR: 'parameters/decoder.pt'
  sampled_dir: 'sampled'
  target_sample_dir: 'target_sample'
+
+ # Training: checkpoints live under this folder (relative to root_path unless absolute).
+ # Override with env EVAE_TRAINING_RUNS_ROOT.
+ training_runs_root: training_params
+
+ # Generation outputs: base folder; scripts write under <generation_output_root>/<model>/...
+ # Override with env EVAE_GENERATION_OUTPUT_ROOT.
+ generation_output_root: generations
+
+ # Default folders (relative to root_path) containing encoder.pt + decoder.pt per model.
+ # Update these after you train, or pass --checkpoint to generate_*.py / generate.py.
+ default_generation_checkpoint:
+   cvae_dhr: training_params/CVAE_DHR/seed_42
+   cvae_hc: training_params/CVAE_HC/seed_42
+   vae_h: training_params/VAE_H/seed_42
+
+ # Short names -> same checkpoint dirs (relative to root_path). Optional.
+ checkpoint_aliases:
+   dhr_seed42: training_params/CVAE_DHR/seed_42
+
  maxLength: 64
  batch_size: 256
  num_epoch: 100

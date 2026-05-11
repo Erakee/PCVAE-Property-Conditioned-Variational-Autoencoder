@@ -6,7 +6,13 @@ import numpy as np
 import torch
 # Add the parent directory to the system path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import pickle, yaml
+import pickle
+from util.config_loader import (
+    default_config_path,
+    load_training_config,
+    project_root,
+    resolve_config_path,
+)
 import rdkit.Chem as Chem
 import rdkit.Chem.AllChem as AllChem
 import rdkit.DataStructs as DataStructs
@@ -18,38 +24,17 @@ from rdkit import rdBase, RDLogger
 rdBase.DisableLog('rdApp.error')
 RDLogger.DisableLog('rdApp.*')
 
-def __load_config(fyaml='D:/Project/EVAE_paper/config.yaml', model='vae_h'):
-    with open(fyaml, 'r', encoding='utf-8') as f:
-        config = yaml.full_load(f)
-    config['root_path'] = os.path.abspath(config['root_path'])
-    config['fname_dataset'] = os.path.join(config['root_path'], config['fname_dataset'])
-    config['token_file'] = os.path.join(config['root_path'], config['token_file'])
-    config['fname_fps'] = os.path.join(config['root_path'], config['fname_fps'])
-    config['fname_tokenizer'] = os.path.join(config['root_path'], config['fname_tokenizer'])
-    config['sampled_dir'] = os.path.join(config['root_path'], config['sampled_dir'])
-    config['vae_param']['maxLength'] = config['maxLength']
-    if model == 'vae_h':
-        config['fname_vae_encoder_parameters'] = os.path.join(config['root_path'],
-                                                              config['fname_enc_params_VAE_H'])
-        config['fname_vae_decoder_parameters'] = os.path.join(config['root_path'],
-                                                              config['fname_dec_params_VAE_H'])
-    elif model == 'cvae_hc':
-        config['fname_vae_encoder_parameters'] = os.path.join(config['root_path'],
-                                                              config['fname_enc_params_CVAE_HC'])
-        config['fname_vae_decoder_parameters'] = os.path.join(config['root_path'],
-                                                              config['fname_dec_params_CVAE_HC'])
-    elif model == 'cvae_dhr':
-        config['fname_vae_encoder_parameters'] = os.path.join(config['root_path'],
-                                                              config['fname_enc_params_CVAE_DHR'])
-        config['fname_vae_decoder_parameters'] = os.path.join(config['root_path'],
-                                                              config['fname_dec_params_CVAE_DHR'])
 
-    return config
+def __load_config(fyaml=None, model='vae_h'):
+    """Alias for :func:`util.config_loader.load_training_config`."""
+    return load_training_config(fyaml, model=model)
 
-config = __load_config()
+
+config = load_training_config()
+
 
 def p_cfg(model):
-    return __load_config(model=model)
+    return load_training_config(model=model)
 
 def mkdir_multi(path_str):
     if os.path.isdir(path_str) or path_str == '':

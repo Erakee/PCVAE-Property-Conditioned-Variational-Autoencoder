@@ -105,10 +105,12 @@ class ori_SmilesDataset(torch.utils.data.Dataset):
         numVectors = self.tokenizer.getNumVector(tokenVectors)
         one_hot_code = torch.zeros((len(smilesStrs), self.maxLength, self.tokenizer.getTokensSize() - skip_vocab), dtype=torch.float32)
         for i, vec in enumerate(numVectors):
+            last_j = -1
             for j, n in enumerate(vec):
                 one_hot_code[i, j, n - 2] = 1
-            if j + 1 < self.maxLength:
-                one_hot_code[i, j + 1:, 0] = 1
+                last_j = j
+            if last_j + 1 < self.maxLength:
+                one_hot_code[i, last_j + 1:, 0] = 1
         return one_hot_code
 
 
@@ -149,10 +151,12 @@ class SmilesDataset(torch.utils.data.Dataset):
         )
 
         for i, vec in enumerate(numVectors):
+            last_j = -1
             for j, n in enumerate(vec):
                 one_hot_code[i, j, n - 2] = 1
-            if j + 1 < self.maxLength:
-                one_hot_code[i, j + 1:, 0] = 1
+                last_j = j
+            if last_j + 1 < self.maxLength:
+                one_hot_code[i, last_j + 1:, 0] = 1
 
         return one_hot_code, enthalpies
 
