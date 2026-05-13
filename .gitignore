@@ -53,3 +53,36 @@ other_tool/smiles2xyz/*.xyz
 # pcvae_tool 自带的运行产物（权重/缓存/输出）
 pcvae_tool/outputs/
 pcvae_tool/data/.tokenizer.pkl
+
+# ── 本地私有 / 运行产物（公开仓库建议不提交）────────────────
+# 仅本机使用的脚本、笔记、密钥等（与 local.example/ 可选模板分离）
+local/
+
+# 训练 checkpoint、日志、Excel、sweep 汇总（见 config.yaml training_runs_root）
+training_params/
+
+# 生成脚本输出根目录（见 config.yaml generation_output_root）
+generations/
+
+# 根目录 parameters/ 下默认 encoder.pt / decoder.pt（多为本机权重）
+parameters/*.pt
+
+# 数据集缓存、指纹等（CSV 是否忽略请按项目需要自行调整）
+data/*.pkl
+data/*_soap_*.pkl
+
+# 训练过程 Excel、临时表格
+*.xlsx
+
+# 环境变量与密钥（若使用）
+.env
+.env.*
+
+# Debug 产物
+debug/*.pt
+debug/*.pth
+
+# 常见实验跟踪目录
+wandb/
+lightning_logs/
+runs/
