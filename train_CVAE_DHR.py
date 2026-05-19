@@ -11,10 +11,10 @@ from training.launcher import run_training
 
 
 def main():
-    # Quick test with fixed prior_block (no BatchNorm) – single seed
-    for seed in [42]:
+    # v5: 可微cond_loss (z→焓值回归头) + 焓值门控 + 更低KL + 更慢cond增长
+    for seed in [42, 123, 256]:
         print(f"\n{'=' * 40}\nRunning experiment with seed: {seed}\n{'=' * 40}")
-        run_training('cvae_dhr', seed, tag='260519test_v4')
+        run_training('cvae_dhr', seed, tag='260519test_v5')
 
 
 if __name__ == '__main__':

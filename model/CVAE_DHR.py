@@ -260,9 +260,22 @@ class CondDecoder(torch.nn.Module):
         )
         self.fc = torch.nn.Linear(hidden_dim, num_vocabs, device=self.device)
 
+        # 焓值条件门控：训练初期门接近0，强迫z学习条件信息；逐渐打开
+        self.h_gate_logit = nn.Parameter(torch.tensor(-2.0))  # sigmoid(-2)≈0.12
+
+        # z → 焓值 可微回归头：直接从latent预测焓值，替代纯外部预测器的不可微梯度
+        self.z_to_enthalpy = nn.Sequential(
+            nn.Linear(latent_dim, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        ).to(device)
+
     def forward(self, latent_vec, enthalpy, X, freerun=False, randomchoose=True):
         latent_vec = latent_vec.to(self.device)  # (512, 64)
         enthalpy_ori = enthalpy
+        # 焓值门控：控制decoder能看到多少焓值信息
+        h_gate = torch.sigmoid(self.h_gate_logit)  # scalar in (0, 1)
+        enthalpy = enthalpy * h_gate  # 门控缩放
         enthalpy = enthalpy.unsqueeze(1).unsqueeze(2).expand(-1, self.maxLength, -1)  # (512, 128, 1)
 
         if not freerun:
@@ -287,7 +300,10 @@ class CondDecoder(torch.nn.Module):
         else:  # 生成模式：自由运行
             batch_size = latent_vec.size(0)
             out = torch.zeros((batch_size, self.maxLength), dtype=torch.float32, device=self.device)  # 添加 device
-            cond = enthalpy_ori.unsqueeze(1).unsqueeze(2)  # [batch, 1, con_dims]
+            # 使用门控后的焓值（与训练一致），注意 enthalpy_ori 是门控前的值
+            # enthalpy 已经在上面经过门控，但被expand了，需要用原始门控值
+            h_gate = torch.sigmoid(self.h_gate_logit)
+            cond = (enthalpy_ori * h_gate).unsqueeze(1).unsqueeze(2)  # [batch, 1, con_dims]
             # 初始字符设为 <start>（假设索引为0）
             current_idx = torch.zeros((batch_size, 1), dtype=torch.long, device=self.device)
             current_embed = self.embed(current_idx)  # [batch, 1, embed_dim]
@@ -479,21 +495,21 @@ class ConVAE(object):
         num_epochs = utils.config['num_epoch']
         scheduler_count = 0
 
-        # === KL Annealing 参数 (v3: 降低KL上限，避免KLD主导total loss) ===
-        kl_warmup_epochs = 10            # 前N个epoch KL完全关闭，纯重建学习
-        kl_rampup_epochs = 20            # 用20个epoch线性增 (epoch 11-30)
+        # === KL Annealing 参数 (v5: 降低KL上限，释放latent capacity给条件控制) ===
+        kl_warmup_epochs = 20            # 前20个epoch纯重建学习
+        kl_rampup_epochs = 50            # 用50个epoch线性增长 (epoch 21-70)
         kl_weight = 0.0                  # 当前KL权重
-        kl_weight_max = 0.3             # KL权重上限，从1.0降到0.3，避免KLD占total loss的97%
-        free_bits = 0.1                  # 每维度最低KL值，防止posterior collapse
+        kl_weight_max = 0.1             # v5: 从0.3降到0.1，避免KLD主导total loss (v4: 6.4*0.3=1.92 → v5: 1.28*0.1=0.128)
+        free_bits = 0.02                 # v5: 从0.1降到0.02，释放60+维给reconstruction (最小KLD=1.28)
 
-        # === 渐进式条件训练参数 (v3: 加速cond增长) ===
-        cond_warmup_epochs = 30          # 前N个epoch纯重建学习，不使用cond_loss
+        # === 渐进式条件训练参数 (v5: 可微cond_loss + 更积极的条件训练) ===
+        cond_warmup_epochs = 20          # v5: 从30降到20
         cond_weight = 0.0                # 当前cond_loss权重
-        cond_weight_start = 0.1          # cond阶段开始时的权重
-        cond_weight_step = 0.1           # 每次增加的量 (v3: 从0.05翻倍到0.1)
-        cond_weight_max = 10.0           # cond_loss最大权重
+        cond_weight_start = 0.01         # v5: 从0.1降到0.01
+        cond_weight_step = 0.01          # v5: 从0.1降到0.01
+        cond_weight_max = 0.3            # v5: 从10.0降到0.3（可微loss更稳定，不需要过大权重）
         cond_growth_interval = 10        # 每隔多少epoch增长一次
-        cond_valid_drop_tolerance = 0.15 # valid_rate下降容忍度 (v3: 从0.10放宽到0.15)
+        cond_valid_drop_tolerance = 0.15 # valid_rate下降容忍度
         cond_training_started = False
         best_valid_in_cond_phase = 0.0
         epochs_since_last_growth = 0
@@ -544,10 +560,13 @@ class ConVAE(object):
                 if torch.isnan(kld_loss) or torch.isinf(kld_loss):
                     kld_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-                cond_loss_mean = self.calculate_enthalpy_loss(predicted_smiles, enthalpy, lb, ub)
+                # v5: 可微 cond_loss — 使用 z→焓值 回归头（替代不可微的外部预测器）
+                # 从 latent_vec (重参数化采样) 预测焓值，与真实归一化焓值比较
+                z_pred_enthalpy = self.decoder.z_to_enthalpy(latent_vec).squeeze(-1)  # [batch]
+                cond_loss_mean = F.mse_loss(z_pred_enthalpy, enthalpy)
 
                 # 总损失（使用渐进式cond_weight）
-                if cond_weight > 0 and cond_loss_mean != 0 and abs(cond_loss_mean) < 10:
+                if cond_weight > 0 and cond_loss_mean != 0 and abs(cond_loss_mean) < 100:
                     total_loss = reconstruction_loss + kld_loss + cond_weight * cond_loss_mean
                 else:
                     total_loss = reconstruction_loss + kld_loss
