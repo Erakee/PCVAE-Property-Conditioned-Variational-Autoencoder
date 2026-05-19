@@ -11,10 +11,10 @@ from training.launcher import run_training
 
 
 def main():
-    # v5: 可微cond_loss (z→焓值回归头) + 焓值门控 + 更低KL + 更慢cond增长
-    for seed in [42, 123, 256]:
+    # v7: kl_weight_max=0.2, cond_weight_max=0.5, max_epoch=120
+    for seed in [30, 42, 93, 123, 256]:
         print(f"\n{'=' * 40}\nRunning experiment with seed: {seed}\n{'=' * 40}")
-        run_training('cvae_dhr', seed, tag='260519test_v5')
+        run_training('cvae_dhr', seed, tag='260519test_v7', num_epoch=120)
 
 
 if __name__ == '__main__':
