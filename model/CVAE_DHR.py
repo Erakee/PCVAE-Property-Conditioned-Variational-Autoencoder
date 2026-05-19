@@ -122,17 +122,43 @@ class ResidualBlock(nn.Module):
         return out
 
 
+class ResPriorResBlock(nn.Module):
+    """ResidualBlock without BatchNorm, for use in ResPriorBlock.
+
+    BatchNorm's running_var can collapse to zero when the prior block
+    receives scalar (1-D) inputs with small batches, causing numerical
+    explosion at inference time.  This variant keeps only a plain Linear
+    shortcut so that no running statistics are needed.
+    """
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.linear1 = nn.Linear(in_dim, out_dim)
+        self.linear2 = nn.Linear(out_dim, out_dim)
+        self.activation = nn.ReLU()
+        self.shortcut = nn.Sequential()
+        if in_dim != out_dim:
+            self.shortcut = nn.Linear(in_dim, out_dim)
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+        out = self.linear1(x)
+        out = self.activation(out)
+        out = self.linear2(out)
+        out += residual
+        return out
+
+
 class ResPriorBlock(nn.Module):
     def __init__(self, cond_dim, latent_dim):
         super().__init__()
         self.mlp = nn.Sequential(
-            # 渐进式维度扩展
+            # 渐进式维度扩展 (no BatchNorm – avoids running_var collapse)
             nn.Linear(cond_dim, 4),  # 1→4
             nn.ReLU(),
-            ResidualBlock(4, 8),  # 4→8
-            ResidualBlock(8, 16),  # 8→16
-            ResidualBlock(16, 32),
-            ResidualBlock(32, 64)
+            ResPriorResBlock(4, 8),   # 4→8
+            ResPriorResBlock(8, 16),  # 8→16
+            ResPriorResBlock(16, 32),
+            ResPriorResBlock(32, 64)
         )
         self.mu = nn.Linear(64, latent_dim)
         self.logvar = nn.Linear(64, latent_dim)

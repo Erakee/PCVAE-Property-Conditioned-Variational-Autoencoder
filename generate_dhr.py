@@ -209,7 +209,10 @@ def generate_molecules(
             # 采样后每个样本有不同的 N(0,1)-scale 向量，与 decoder
             # 训练时的输入分布一致，且焓值条件通过 h_cond 传递给 decoder。
             mu_prior, logvar_prior = vae_model.encoder.prior_block(h_cond.unsqueeze(1))
-            std_prior = torch.exp(0.5 * logvar_prior)
+            # Clamp prior outputs to prevent numerical explosion
+            mu_prior    = mu_prior.clamp(-10.0, 10.0)
+            logvar_prior = logvar_prior.clamp(-10.0, 10.0)
+            std_prior   = torch.exp(0.5 * logvar_prior)
             eps = torch.randn((num_samples, latent_dim), device=device)
             mu_n     = mu_prior + eps * std_prior
             norm_n_h = h_cond

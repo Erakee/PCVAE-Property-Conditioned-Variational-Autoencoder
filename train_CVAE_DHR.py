@@ -11,9 +11,10 @@ from training.launcher import run_training
 
 
 def main():
-    for seed in [42, 43]:
+    # Quick test with fixed prior_block (no BatchNorm) – single seed
+    for seed in [42]:
         print(f"\n{'=' * 40}\nRunning experiment with seed: {seed}\n{'=' * 40}")
-        run_training('cvae_dhr', seed, tag='260519test_v3')
+        run_training('cvae_dhr', seed, tag='260519test_v4')
 
 
 if __name__ == '__main__':
