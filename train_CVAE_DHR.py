@@ -11,9 +11,9 @@ from training.launcher import run_training
 
 
 def main():
-    for seed in [42]:
+    for seed in [42, 43]:
         print(f"\n{'=' * 40}\nRunning experiment with seed: {seed}\n{'=' * 40}")
-        run_training('cvae_dhr', seed)
+        run_training('cvae_dhr', seed, tag='260519test_v3')
 
 
 if __name__ == '__main__':

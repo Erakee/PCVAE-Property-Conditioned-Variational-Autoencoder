@@ -20,7 +20,7 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         'config_model_arg': 'cvae_dhr',
         'dataset': 'indices',
         'tokenizer_mode': 'full',
-        'scheduler_step_gamma': (5, 0.7),
+        'scheduler_step_gamma': (15, 0.9),
         'output_subdir': 'CVAE_DHR',
     },
     'cvae_hc': {

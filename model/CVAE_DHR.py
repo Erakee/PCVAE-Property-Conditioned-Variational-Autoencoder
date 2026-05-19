@@ -32,7 +32,7 @@ class TrainingLogger:
         # 初始化数据存储
         self.log_data = pd.DataFrame(columns=[
             'epoch', 'recon_loss', 'kld_loss',
-            'cond_loss', 'total_loss', 'valid_rate'
+            'cond_loss', 'cond_weight', 'kl_weight', 'total_loss', 'valid_rate', 'quality'
         ])
 
         # 图表样式设置（兼容新旧版matplotlib）
@@ -55,44 +55,52 @@ class TrainingLogger:
         self.log_data.to_excel(excel_path, index=False)
 
     def plot_losses(self, epoch_interval=50):
-        """绘制损失曲线并保存"""
+        """绘制损失曲线并保存（对数坐标，避免初始epoch极端值压扁曲线）"""
         if len(self.log_data) == 0:
             return
 
-        plt.figure(figsize=(12, 6), facecolor='white')  # 设置图表背景为白色
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), facecolor='white')
+        fig.suptitle(f"Training Progress @ Epoch {int(self.log_data['epoch'].max())}", y=1.02, fontsize=14)
 
-        # 绘制主损失曲线
-        plt.subplot(1, 2, 1)
+        # ================= 左侧：各损失（对数坐标）=================
+        # 过滤掉值为0或负数的点（对数坐标不支持），用绝对值
         for i, col in enumerate(['recon_loss', 'kld_loss', 'cond_loss']):
-            line, = plt.plot(self.log_data['epoch'], self.log_data[col],
-                             color=self.colors[i], label=col.replace('_', ' ').title())
-            plt.setp(line, linewidth=2.0)  # 设置线条宽度为2.0，使线条更清晰
-        plt.xlabel('Epoch', fontsize=12)  # 设置x轴标签字体大小为12
-        plt.ylabel('Loss', fontsize=12)  # 设置y轴标签字体大小为12
-        plt.legend(fontsize=12)  # 设置图例字体大小为12
+            data = self.log_data[col].abs()
+            # 替换0值为一个小正数，避免log(0)
+            data = data.replace(0, np.finfo(float).eps)
+            ax1.semilogy(self.log_data['epoch'], data,
+                         color=self.colors[i], label=col.replace('_', ' ').title(),
+                         linewidth=2.0)
+        ax1.set_xlabel('Epoch', fontsize=12)
+        ax1.set_ylabel('Loss (log scale)', fontsize=12)
+        ax1.legend(fontsize=11, loc='upper right')
+        ax1.grid(True, which="both", ls="--", alpha=0.5)
 
-        # 绘制验证率和总损失
-        plt.subplot(1, 2, 2)
-        ax1 = plt.gca()
-        line1, = ax1.plot(self.log_data['epoch'], self.log_data['total_loss'],
-                          color=self.colors[3], label='Total Loss')
-        plt.setp(line1, linewidth=2.0)  # 设置线条宽度为2.0，使线条更清晰
-        ax1.set_xlabel('Epoch', fontsize=12)  # 设置x轴标签字体大小为12
-        ax1.set_ylabel('Loss', fontsize=12)  # 设置y轴标签字体大小为12
+        # ================= 右侧：Total Loss（对数） + Valid Rate（线性）=================
+        total_data = self.log_data['total_loss'].abs().replace(0, np.finfo(float).eps)
+        line1, = ax2.semilogy(self.log_data['epoch'], total_data,
+                              color=self.colors[3], label='Total Loss', linewidth=2.0)
+        ax2.set_xlabel('Epoch', fontsize=12)
+        ax2.set_ylabel('Total Loss (log scale)', fontsize=12)
+        ax2.grid(True, which="both", ls="--", alpha=0.5)
 
-        ax2 = ax1.twinx()
-        line2, = ax2.plot(self.log_data['epoch'], self.log_data['valid_rate'] * 100,
-                          color='#9467bd', linestyle='--', label='Valid Rate (%)')
-        plt.setp(line2, linewidth=2.0)  # 设置线条宽度为2.0，使线条更清晰
-        ax2.set_ylabel('Validation Rate (%)', fontsize=12)  # 设置y轴标签字体大小为12
+        ax3 = ax2.twinx()
+        line2, = ax3.plot(self.log_data['epoch'], self.log_data['valid_rate'] * 100,
+                          color='#9467bd', linestyle='--', label='Valid Rate (%)',
+                          linewidth=2.0, marker='s', markersize=4, markevery=max(1, len(self.log_data)//20))
+        ax3.set_ylabel('Validation Rate (%)', fontsize=12)
 
-        plt.title(f"Training Progress @ Epoch {self.log_data['epoch'].max()}", fontsize=14)  # 设置标题字体大小为14
+        # 合并图例
+        lines = [line1, line2]
+        labels = [l.get_label() for l in lines]
+        ax2.legend(lines, labels, fontsize=11, loc='upper left')
+
         plt.tight_layout()
 
         # 保存图片
         plot_path = os.path.join(self.log_dir,
-                                 f"loss_plot_epoch_{self.log_data['epoch'].max()}.png")
-        plt.savefig(plot_path)
+                                 f"loss_plot_epoch_{int(self.log_data['epoch'].max())}.png")
+        plt.savefig(plot_path, bbox_inches='tight', dpi=200)
         plt.close()
 
 class ResidualBlock(nn.Module):
@@ -173,10 +181,9 @@ class CondEncoder(nn.Module): # 通过embedding压缩smiles维度，使用rnn实
         # 动态混合系数
         # alpha = torch.sigmoid(self.mix_weight)  # 可学习参数
         mu = alpha * mu_x + (1 - alpha) * mu_prior
-        # var_x = torch.exp(logvar_x)
-        # var_prior = torch.exp(logvar_prior)
-        # mixed_var = alpha**2 * var_x +(1-alpha)**2 *var_prior
         logvar = 0.5*(alpha * logvar_x + (1 - alpha) * logvar_prior)
+        # 防止 logvar 过大导致 exp(logvar) 溢出为 inf (v3: 收紧到[-5,5]，exp(5)≈148)
+        logvar = torch.clamp(logvar, min=-5.0, max=5.0)
         # logvar = 0.5*((torch.log(alpha**2) + logvar_x) + (torch.log((1 - alpha)**2) + logvar_prior))
         # logvar = torch.log(mixed_var + 1e-8)
 
@@ -286,8 +293,15 @@ class CondDecoder(torch.nn.Module):
                 #     else:
                 #         next_idx = torch.multinomial(probs, 1)  # [batch, 1]
                 if randomchoose:
-                    probs = torch.softmax(logits.squeeze(1), dim=-1)
-                    next_idx = torch.multinomial(probs, 1)  # [batch, 1]
+                    logits_squeezed = logits.squeeze(1)
+                    # 数值稳定性处理：减去max防止exp溢出
+                    logits_squeezed = logits_squeezed - logits_squeezed.max(dim=-1, keepdim=True)[0]
+                    probs = torch.softmax(logits_squeezed, dim=-1)
+                    # 检查概率是否合法，不合法则回退到argmax
+                    if torch.isnan(probs).any() or torch.isinf(probs).any() or (probs < 0).any():
+                        next_idx = torch.argmax(logits_squeezed, dim=-1, keepdim=True)
+                    else:
+                        next_idx = torch.multinomial(probs, 1)  # [batch, 1]
                 else:
                     next_idx = torch.argmax(logits.squeeze(1), dim=-1, keepdim=True)  # [batch, 1]
                 # 更新输出和下一个输入
@@ -439,7 +453,35 @@ class ConVAE(object):
         num_epochs = utils.config['num_epoch']
         scheduler_count = 0
 
+        # === KL Annealing 参数 (v3: 降低KL上限，避免KLD主导total loss) ===
+        kl_warmup_epochs = 10            # 前N个epoch KL完全关闭，纯重建学习
+        kl_rampup_epochs = 20            # 用20个epoch线性增 (epoch 11-30)
+        kl_weight = 0.0                  # 当前KL权重
+        kl_weight_max = 0.3             # KL权重上限，从1.0降到0.3，避免KLD占total loss的97%
+        free_bits = 0.1                  # 每维度最低KL值，防止posterior collapse
+
+        # === 渐进式条件训练参数 (v3: 加速cond增长) ===
+        cond_warmup_epochs = 30          # 前N个epoch纯重建学习，不使用cond_loss
+        cond_weight = 0.0                # 当前cond_loss权重
+        cond_weight_start = 0.1          # cond阶段开始时的权重
+        cond_weight_step = 0.1           # 每次增加的量 (v3: 从0.05翻倍到0.1)
+        cond_weight_max = 10.0           # cond_loss最大权重
+        cond_growth_interval = 10        # 每隔多少epoch增长一次
+        cond_valid_drop_tolerance = 0.15 # valid_rate下降容忍度 (v3: 从0.10放宽到0.15)
+        cond_training_started = False
+        best_valid_in_cond_phase = 0.0
+        epochs_since_last_growth = 0
+        cond_weight_update_epoch = 0     # 开始条件训练的epoch
+
         for epoch in range(1, nepoch + 1):
+            # === KL Annealing: 计算当前epoch的kl_weight ===
+            if epoch <= kl_warmup_epochs:
+                kl_weight = 0.01  # 最小 KL 约束，防止 logvar 完全失控
+            elif epoch <= kl_warmup_epochs + kl_rampup_epochs:
+                kl_weight = 0.01 + (kl_weight_max - 0.01) * (epoch - kl_warmup_epochs) / kl_rampup_epochs
+            else:
+                kl_weight = kl_weight_max
+
             reconstruction_loss_list, kld_loss_list, cond_loss_list, total_loss_list = [], [], [], []
             quality_list, numValid_list = [], []
 
@@ -465,15 +507,22 @@ class ConVAE(object):
                     pred_y.view(-1, pred_y.size(-1)), X.view(-1))
                 # reconstruction_loss = F.cross_entropy(
                 #     pred_y.view(-1, self.decoder.num_vocabs), X.view(-1))
-                # kld_loss = 0.5 * torch.sum(logvar_prior - logvar + (torch.exp(logvar) + (mu - mu_prior)**2) / torch.exp(logvar_prior) - 1)
-                kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-                kld_loss = kld_loss.mean() * KLD_alpha
+                # KL Annealing + Free Bits: 每维度最低KL值防止posterior collapse
+                # logvar 已被 encoder clamp 到 [-10, 10]，exp(10)≈22026，不会溢出
+                kld_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())  # [batch, latent_dim]
+                kld_per_dim = torch.clamp(kld_per_dim, min=free_bits)  # Free Bits
+                # 安全计算：再 clamp 一次确保 kld_per_dim 非负且非 nan/inf
+                kld_per_dim = torch.clamp(kld_per_dim, min=0.0, max=1e6)
+                kld_loss = kld_per_dim.sum(dim=-1).mean() * kl_weight  # KL Annealing
+                # 如果 kld_loss 出现 nan/inf，强制归零避免污染总损失
+                if torch.isnan(kld_loss) or torch.isinf(kld_loss):
+                    kld_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
 
                 cond_loss_mean = self.calculate_enthalpy_loss(predicted_smiles, enthalpy, lb, ub)
 
-                # 总损失
-                if cond_loss_mean != 0 and abs(cond_loss_mean) < 10:  # 条件损失有效
-                    total_loss = reconstruction_loss + kld_loss + cond_loss_mean
+                # 总损失（使用渐进式cond_weight）
+                if cond_weight > 0 and cond_loss_mean != 0 and abs(cond_loss_mean) < 10:
+                    total_loss = reconstruction_loss + kld_loss + cond_weight * cond_loss_mean
                 else:
                     total_loss = reconstruction_loss + kld_loss
 
@@ -481,9 +530,9 @@ class ConVAE(object):
                 encoderOptimizer.zero_grad()
                 decoderOptimizer.zero_grad()
                 total_loss.backward()
-                if not (nBatch == 1 and epoch == 1):  # 跳过第一个batch的梯度裁剪，避免初始化噪声
-                    torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 1)
-                    torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1)
+                # 每个batch都做梯度裁剪，第一个batch可能梯度最大（随机初始化），不裁剪反而危险
+                torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 1)
+                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 1)
                 encoderOptimizer.step()
                 decoderOptimizer.step()
 
@@ -493,11 +542,13 @@ class ConVAE(object):
                 cond_loss_list.append(cond_loss_mean.item())
                 total_loss_list.append(total_loss.item())
 
+                # v3: 每个batch都计算quality（利用已有的predicted_indices，几乎零开销）
+                batch_quality = (predicted_indices == X).sum(dim=-1).float().mean()
+                quality_list.append(batch_quality.item())
+
                 # 打印训练信息
                 if (nBatch == 1 or nBatch % printInterval == 0):
-                    quality = self.reconstruction_quality_per_sample(X, enthalpy).mean()
                     numValid = self.latent_space_quality(numSample, tokenizer)
-                    quality_list.append(quality)
                     numValid_list.append(numValid)
                     if minloss is None or total_loss.item() < minloss:
                         self.encoder.saveState()
@@ -532,23 +583,27 @@ class ConVAE(object):
             Dec_lr = decoderOptimizer.param_groups[0]['lr']
             print(
                 f"[{time.ctime()}] Epoch {epoch:4d}: "
-                f"Reconstruction_Loss= {avg_recon_loss:.5e} "
-                f"KLD_Loss= {avg_kld_loss:.5e} "
-                f"Condition_Loss= {avg_cond_loss:.5e} "
-                f"Total_Loss= {avg_total_loss:.5e} "
+                f"Recon= {avg_recon_loss:.5e} "
+                f"KLD= {avg_kld_loss:.5e} "
+                f"Cond= {avg_cond_loss:.5e} "
+                f"Total= {avg_total_loss:.5e} "
                 f"Quality= {avg_quality:.0f}/{self.decoder.maxLength} "
                 f"Valid= {avg_valid_rate * 100:.1f}% "
+                f"kl_w={kl_weight:.2f} "
+                f"cond_w={cond_weight:.4f} "
                 f"Enc_lr= {Enc_lr:.5e} "
-                f"Dec_lr= {Dec_lr:.5e} "
             )
 
-            # 记录指标
+            # 记录指标 (v3: 加入 quality)
             metrics = {
                 'recon_loss': avg_recon_loss,
                 'kld_loss': avg_kld_loss,
                 'cond_loss': avg_cond_loss,
+                'cond_weight': cond_weight,
+                'kl_weight': kl_weight,
                 'total_loss': avg_total_loss,
-                'valid_rate': avg_valid_rate
+                'valid_rate': avg_valid_rate,
+                'quality': float(avg_quality)
             }
             logger.log_metrics(epoch, metrics)
 
@@ -562,10 +617,48 @@ class ConVAE(object):
                 early_stopper.save_top_models(epoch, logger)
                 break
 
-            if (avg_valid_rate>0.8) and (scheduler_count==0):
-                encoderOptimizer.param_groups[0]['lr'] = 1e-5
-                decoderOptimizer.param_groups[0]['lr'] = 1e-5
-                scheduler_count = 1
+            # LR由StepLR和条件训练阶段自动管理，不再手动覆盖
+
+            # === 渐进式cond_weight更新逻辑 ===
+            if not cond_training_started and epoch >= cond_warmup_epochs:
+                cond_training_started = True
+                cond_weight = cond_weight_start
+                cond_weight_update_epoch = epoch
+                best_valid_in_cond_phase = avg_valid_rate
+                epochs_since_last_growth = 0
+                # 条件训练开始时，给LR一个合理的值，确保能学习新的cond_loss
+                cond_lr = 1e-4
+                for param_group in encoderOptimizer.param_groups:
+                    param_group['lr'] = cond_lr
+                for param_group in decoderOptimizer.param_groups:
+                    param_group['lr'] = cond_lr
+                # 重建对应的scheduler（让后续StepLR在此基础上继续衰减）
+                encoderScheduler = torch.optim.lr_scheduler.StepLR(encoderOptimizer, step_size=15, gamma=0.9)
+                decoderScheduler = torch.optim.lr_scheduler.StepLR(decoderOptimizer, step_size=15, gamma=0.9)
+                print(f"[Cond] Epoch {epoch}: Starting cond training, cond_weight={cond_weight:.4f}, LR reset to {cond_lr}")
+
+            elif cond_training_started:
+                epochs_since_last_growth += 1
+
+                # 更新cond阶段的best valid rate
+                if avg_valid_rate > best_valid_in_cond_phase:
+                    best_valid_in_cond_phase = avg_valid_rate
+
+                # 定期检查是否增长权重
+                if epochs_since_last_growth >= cond_growth_interval and cond_weight < cond_weight_max:
+                    # 检查valid是否下降太多
+                    valid_threshold = best_valid_in_cond_phase - cond_valid_drop_tolerance
+                    if avg_valid_rate >= valid_threshold:
+                        # valid稳定，继续增长
+                        new_weight = min(cond_weight + cond_weight_step, cond_weight_max)
+                        print(f"[Cond] Epoch {epoch}: cond_weight {cond_weight:.4f} -> {new_weight:.4f}, "
+                              f"valid={avg_valid_rate*100:.1f}%, best={best_valid_in_cond_phase*100:.1f}%")
+                        cond_weight = new_weight
+                    else:
+                        # valid下降了，暂停增长
+                        print(f"[Cond] Epoch {epoch}: valid dropped ({avg_valid_rate*100:.1f}% < "
+                              f"{valid_threshold*100:.1f}%), holding cond_weight={cond_weight:.4f}")
+                    epochs_since_last_growth = 0
 
         # 训练结束后保存最佳模型
         # early_stopper.save_top_models(num_epochs - 1, logger)
