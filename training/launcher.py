@@ -41,6 +41,15 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         'scheduler_step_gamma': (5, 0.95),
         'output_subdir': 'VAE_H',
     },
+    'cvae_film': {
+        'module': 'model.CVAE_FiLM',
+        'class_name': 'FiLMConVAE',
+        'config_model_arg': 'cvae_film',
+        'dataset': 'indices',
+        'tokenizer_mode': 'full',
+        'scheduler_step_gamma': (15, 0.9),
+        'output_subdir': 'CVAE_FiLM',
+    },
 }
 
 

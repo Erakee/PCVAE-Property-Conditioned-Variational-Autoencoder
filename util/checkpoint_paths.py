@@ -77,7 +77,8 @@ def default_generation_output_dir(cfg: Dict[str, Any], model_key: str) -> str:
     base = cfg.get('generation_output_root')
     if not base:
         base = os.path.join(cfg['root_path'], 'generations')
-    safe = {'cvae_dhr': 'cvae_dhr', 'cvae_hc': 'cvae_hc', 'vae_h': 'vae_h'}.get(
+    safe = {'cvae_dhr': 'cvae_dhr', 'cvae_hc': 'cvae_hc', 'vae_h': 'vae_h',
+            'cvae_film': 'cvae_film'}.get(
         model_key, model_key
     )
     return os.path.join(base, safe)

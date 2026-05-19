@@ -63,6 +63,11 @@ def load_training_config(fyaml: Optional[str] = None, model: str = 'vae_h') -> D
             config['root_path'], config['fname_enc_params_CVAE_DHR'])
         config['fname_vae_decoder_parameters'] = os.path.join(
             config['root_path'], config['fname_dec_params_CVAE_DHR'])
+    elif model == 'cvae_film':
+        config['fname_vae_encoder_parameters'] = os.path.join(
+            config['root_path'], config['fname_enc_params_CVAE_FiLM'])
+        config['fname_vae_decoder_parameters'] = os.path.join(
+            config['root_path'], config['fname_dec_params_CVAE_FiLM'])
 
     _apply_path_layout_env(config)
 

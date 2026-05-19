@@ -12,6 +12,8 @@
  fname_dec_params_CVAE_HC: 'parameters/decoder.pt'
  fname_enc_params_CVAE_DHR: 'parameters/encoder.pt'
  fname_dec_params_CVAE_DHR: 'parameters/decoder.pt'
+ fname_enc_params_CVAE_FiLM: 'parameters/encoder.pt'
+ fname_dec_params_CVAE_FiLM: 'parameters/decoder.pt'
  sampled_dir: 'sampled'
  target_sample_dir: 'target_sample'
 
@@ -29,6 +31,7 @@
    cvae_dhr: training_params/CVAE_DHR/seed_42
    cvae_hc: training_params/CVAE_HC/seed_42
    vae_h: training_params/VAE_H/seed_42
+   cvae_film: training_params/CVAE_FiLM/seed_42
 
  # Short names -> same checkpoint dirs (relative to root_path). Optional.
  checkpoint_aliases:
