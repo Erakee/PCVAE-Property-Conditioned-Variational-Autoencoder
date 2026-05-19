@@ -184,34 +184,35 @@ def generate_molecules(
             X        = torch.zeros((num_samples, maxLength), dtype=torch.long, device=device)
 
         else:
-            if has_smiles:
-                X = _encode_smiles(smiles, tokenizer, maxLength, pad_idx, num_samples, device)
-                _, mu_n_x, logvar_n_x, _, _ = vae_model.encoder(
-                    X, torch.zeros(1, device=device), alpha=1)
-            else:
-                X          = torch.zeros((num_samples, maxLength), dtype=torch.long, device=device)
-                mu_n_x     = torch.randn((num_samples, latent_dim), device=device)
-                logvar_n_x = torch.zeros((num_samples, latent_dim), device=device)
-
+            # 构造焓值条件向量
             if has_enthalpy:
                 norm_h = (enthalpy - lb) / (ub - lb)
                 if not (0 <= norm_h <= 1):
                     raise ValueError(
                         f'Enthalpy {enthalpy:.2f} is outside training range '
                         f'[{lb:.2f}, {ub:.2f}] kcal/mol.')
-                h_t        = torch.tensor([norm_h], dtype=torch.float32, device=device)
-                mu_p, lv_p = vae_model.encoder.prior_block(h_t.unsqueeze(1))
-                mu_n_prior    = mu_p.expand(num_samples, -1).contiguous()
-                logvar_n_prior = lv_p.expand(num_samples, -1).contiguous()
-                norm_n_h   = h_t.expand(num_samples).contiguous()
+                h_cond = torch.full((num_samples,), norm_h,
+                                    dtype=torch.float32, device=device)
             else:
-                norm_n_h   = torch.rand(num_samples, device=device)
-                mu_n_prior, logvar_n_prior = vae_model.encoder.prior_block(
-                    norm_n_h.unsqueeze(1))
+                h_cond = torch.rand(num_samples, device=device)
 
-            mu_n    = alpha * mu_n_x + (1 - alpha) * mu_n_prior
-            logvar_n = 0.5 * (alpha * logvar_n_x + (1 - alpha) * logvar_n_prior)
-            mu_n    = vae_model.encoder.reparameterize(mu_n, logvar_n)
+            if has_smiles:
+                X = _encode_smiles(smiles, tokenizer, maxLength, pad_idx,
+                                   num_samples, device)
+            else:
+                X = torch.zeros((num_samples, maxLength),
+                                dtype=torch.long, device=device)
+
+            # 从 prior 分布采样（而非用 posterior 均值），
+            # 因为训练时 encoder 存在后验坍缩（mu≈0），直接用 mu
+            # 会导致所有样本相同、条件控制失效。prior 的 mu≈0、std≈1，
+            # 采样后每个样本有不同的 N(0,1)-scale 向量，与 decoder
+            # 训练时的输入分布一致，且焓值条件通过 h_cond 传递给 decoder。
+            mu_prior, logvar_prior = vae_model.encoder.prior_block(h_cond.unsqueeze(1))
+            std_prior = torch.exp(0.5 * logvar_prior)
+            eps = torch.randn((num_samples, latent_dim), device=device)
+            mu_n     = mu_prior + eps * std_prior
+            norm_n_h = h_cond
 
         # ── 解码并验证 ────────────────────────────────────────────────────────
         y            = vae_model.decoder(mu_n, norm_n_h, X, freerun=True).cpu()
