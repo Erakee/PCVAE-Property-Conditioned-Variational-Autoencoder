@@ -58,9 +58,8 @@ pcvae_tool/
 # Jupyter
 .ipynb_checkpoints/
 
-# Large model weights (VAE encoder/decoder — not included; train from scratch)
-parameters/encoder.pt
-parameters/decoder.pt
+# Legacy parameter directory (use pretrained/ instead)
+parameters/
 
 # Pickle caches
 *.pkl

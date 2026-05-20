@@ -8,6 +8,7 @@ This repository contains the implementation of EVAE, a conditional variational a
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Data Preparation](#data-preparation)
+- [Pre-trained Models](#pre-trained-models)
 - [Training](#training)
 - [Generation](#generation)
 - [Configuration](#configuration)
@@ -56,10 +57,24 @@ EVAE_paper/
 │   ├── em_test.csv              # Test dataset
 │   ├── em_train.smi             # SMILES vocabulary
 │   └── database_CHON.csv        # Full CHON database
+├── pretrained/                  # Pre-trained model weights (encoder + decoder)
+│   ├── CVAE_DHR/
+│   │   ├── default/             # Best single-seed checkpoint
+│   │   └── multi-seed-test/     # Multi-seed reproducibility checkpoints
+│   │       ├── seed_30/
+│   │       ├── seed_42/
+│   │       ├── seed_93/
+│   │       ├── seed_123/
+│   │       └── seed_256/
+│   ├── CVAE_FiLM/
+│   │   └── default/             # Multi-seed checkpoints (seed_30, seed_42, seed_93)
+│   ├── CVAE_HC/
+│   │   └── default/
+│   └── VAE_H/
+│       └── default/
 ├── enthalpy/
 │   ├── stateGNN.pt              # Pre-trained MPNN weights
 │   └── graphdataset.py          # Graph dataset for MPNN
-├── parameters/                  # Model checkpoint directory (created after training)
 └── README.md
 ```
 
@@ -98,6 +113,25 @@ pip install -r requirements.txt
    - **enthalpy**: formation enthalpy value
 3. Prepare the SMILES vocabulary file (`data/em_train.smi`) — one SMILES per line.
 4. The tokenizer will be automatically generated from the SMILES file on first run.
+
+## Pre-trained Models
+
+Pre-trained encoder and decoder weights are provided in the `pretrained/` directory. You can use them directly for molecule generation without retraining.
+
+| Model | Path | Description |
+|-------|------|-------------|
+| CVAE-DHR (default) | `pretrained/CVAE_DHR/default/` | Best single-seed (seed_42) checkpoint |
+| CVAE-DHR (multi-seed) | `pretrained/CVAE_DHR/multi-seed-test/` | 5 seeds (30, 42, 93, 123, 256) for reproducibility |
+| CVAE-FiLM | `pretrained/CVAE_FiLM/default/` | 3 seeds (30, 42, 93) |
+| CVAE-HC | `pretrained/CVAE_HC/default/` | Single-seed checkpoint |
+| VAE baseline | `pretrained/VAE_H/default/` | Single-seed checkpoint |
+
+Each directory contains `encoder.pt` and `decoder.pt`. To generate molecules using pre-trained weights:
+
+```bash
+# Example: generate with CVAE-DHR default checkpoint
+python generate_dhr.py --checkpoint pretrained/CVAE_DHR/default --nsamples 1000
+```
 
 ## Training
 
