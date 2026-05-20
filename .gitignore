@@ -29,33 +29,41 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# 生成物：SMILES / 焓值 / summary 等（generate_dhr.py 等脚本输出）
-generate_smi/
-
-# 由 util.utils 从 em_train.smi 自动构建，可删除后重新生成
+# Tokenizer (auto-generated from data/*.smi)
 .tokenizer.pkl
 
-# 训练日志默认目录（CVAE_DHR.TrainingLogger 未指定 base_dir 时）
-experiments/
+# Debug and development scripts
+debug/
 
-# config.yaml 中的采样目录（若存在）
+# Visualization and analysis scripts
+visualization/
+
+# Training outputs / experiment logs
+experiments/
+training_params/
+generations/
+
+# Generated outputs
+generate_smi/
 sampled/
 target_sample/
 
-# 工具脚本产生的大量 xyz / 中间输出（保留源码即可）
-other_tool/smiles2xyz/outputxyz/
-other_tool/smiles2xyz/batch*/
-other_tool/smiles2xyz/*.xyz
+# Backup files
+*_backup.py
+
+# Non-essential tools
+other_tool/
+pcvae_tool/
 
 # Jupyter
 .ipynb_checkpoints/
 
-# pcvae_tool 自带的运行产物（权重/缓存/输出）
-pcvae_tool/outputs/
-pcvae_tool/data/.tokenizer.pkl
-/generations
-/training_params
-/model/__pycache__
-/util/__pycache__
-/dataset/__pycache__
-/debug
+# Large model weights (VAE encoder/decoder — not included; train from scratch)
+parameters/encoder.pt
+parameters/decoder.pt
+
+# FP data (generated utility file)
+data/em_fps.pkl
+
+# SMILES generation output archive
+generate_smi.zip

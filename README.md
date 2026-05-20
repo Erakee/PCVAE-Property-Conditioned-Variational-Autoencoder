@@ -1,117 +1,139 @@
 # EVAE_paper
 
-Variational autoencoders and conditional VAEs for **SMILES-based molecular generation**, with optional conditioning on **heat of formation (enthalpy)**. The repo includes training code, evaluation utilities, and an optional inference-oriented package (`pcvae_tool`).
+Official implementation of **Property-Conditioned Variational Autoencoder (PCVAE)** for molecular generation of energetic materials with enthalpy control.
 
-## Features
+## Overview
 
-- **Models**
-  - **`vae_h`** — vanilla VAE on one-hot SMILES (see `model/VAE_H_SEED.py`).
-  - **`cvae_hc`** — conditional VAE with enthalpy concatenated in the encoder (`model/CVAE_HC_SEED.py`).
-  - **`cvae_dhr`** — conditional VAE with embedding encoder, GRU decoder, and enthalpy-dependent prior blending (`model/CVAE_DHR.py`).
-- **Unified training CLI** — `train.py` selects the model, seeds, output layout, and hyperparameter overrides.
-- **Portable config** — `config.yaml` uses `root_path: '.'` so paths resolve relative to the config file (no hard-coded drive letters).
+This repository provides the training and generation code for the PCVAE model described in our paper. The model generates novel energetic molecules by conditioning on target heats of formation (EoF) through a dual-latent fusion architecture with FiLM-based property conditioning.
+
+**Key features:**
+- Conditional VAE with dual latent space (molecular structure + property)
+- FiLM-based property conditioning in the decoder
+- Gradual property-aware training strategy for stable optimization
+- Pretrained GNN-based enthalpy prediction for property supervision
 
 ## Requirements
 
-Core dependencies (training & dataset tooling):
-
-- Python 3.8+ recommended  
-- [PyTorch](https://pytorch.org/) (CUDA build optional; match your GPU drivers)
-- `numpy`, `pandas`, `PyYAML`
-- [RDKit](https://www.rdkit.org/)
-- `matplotlib` (training logs / plots in some model modules)
-- `dscribe`, `ase` (SOAP / descriptor paths in `dataset` and `util`)
-
-For **graph-based enthalpy prediction** and the `pcvae_tool` client, you also need PyTorch Geometric and related wheels; see `pcvae_tool/requirements.txt`.
+- Python >= 3.8
+- PyTorch >= 1.13
+- RDKit
+- NumPy, Pandas, PyYAML, Matplotlib
 
 ## Installation
 
 ```bash
-git clone <your-fork-or-upstream-url> EVAE_paper
+git clone https://github.com/Erakee/EVAE_paper.git
 cd EVAE_paper
+pip install -r requirements.txt
 ```
 
-Install PyTorch for your platform from the [official install matrix](https://pytorch.org/get-started/locally/), then install the rest, for example:
-
+**Note:** RDKit is best installed via conda:
 ```bash
-pip install numpy pandas pyyaml matplotlib rdkit dscribe ase
-# Optional: pcvae_tool extras
-pip install -r pcvae_tool/requirements.txt
+conda install -c rdkit rdkit
 ```
 
-Place your dataset and token list under the project root (or adjust `config.yaml`). Expected default names are under `data/` (see below).
+## Project Structure
 
-## Data & configuration
+```
+EVAE_paper/
+├── train.py                  # Unified training CLI
+├── generate.py               # Unified generation CLI
+├── generate_dhr.py           # Generation script for PCVAE (DHR)
+├── config.yaml               # Project configuration
+├── requirements.txt          # Python dependencies
+├── data/
+│   ├── em_train.csv          # Training dataset
+│   ├── em_test.csv           # Test dataset
+│   └── em_train.smi          # Token dictionary
+├── model/
+│   ├── CVAE_DHR.py           # PCVAE model (main model)
+│   ├── CVAE_FiLM.py          # FiLM-variant PCVAE
+│   ├── CVAE_HC_SEED.py       # CVAE baseline (enthalpy concat)
+│   ├── VAE_H_SEED.py         # VAE baseline
+│   └── mpnn.py               # MPNN for enthalpy prediction
+├── enthalpy/
+│   ├── stateGNN.pt           # Pretrained MPNN enthalpy predictor
+│   └── graphdataset.py       # Graph dataset utilities
+├── dataset/
+│   └── dataset.py            # SMILES dataset and tokenizer
+└── util/
+    ├── utils.py              # Utility functions
+    ├── enthalpy_predictor.py # Enthalpy prediction wrapper
+    └── tokens.py             # Token processing
+```
 
-- **CSV** — e.g. `data/em_train.csv` with at least `smiles` and `heat_of_formation` (see `config.yaml` → `fname_dataset`).
-- **Token dictionary** — e.g. `data/em_train.smi` used to build `.tokenizer.pkl` (see `token_file` / `fname_tokenizer` in `config.yaml`).
-- **Main config** — `config.yaml` at the repository root. Key fields: `maxLength`, `batch_size`, `num_epoch`, `lr`, `vae_param` (hidden sizes, `latent_dim`, `num_vocabs` must match the tokenizer for the chosen model).
+## Data Preparation
 
-Training runs resolve `root_path` relative to the YAML file, so moving the repo to another machine only requires valid relative paths inside that root.
+1. Place your training data in `data/` with columns `smiles` and `heat_of_formation`.
+2. Place the SMILES token file (one SMILES per line) at `data/em_train.smi`.
+3. The tokenizer file `.tokenizer.pkl` will be generated automatically on first run.
+
+The default dataset used in our experiments is `data/em_train.csv`.
 
 ## Training
 
-From the repository root:
+The unified training CLI is `train.py`:
 
 ```bash
-# List registered model keys
-python train.py --list-models
+# Train the main PCVAE model (CVAE-DHR)
+python train.py --model cvae_dhr --seeds 42
 
-# Train CVAE-DHR (default config, seed 42)
-python train.py --model cvae_dhr
+# Train with multiple seeds
+python train.py --model cvae_dhr --seeds 42 43 44
 
-# Multiple seeds and a run tag (output: training_params/CVAE_DHR/<tag>/seed_<n>/)
-python train.py --model cvae_dhr --seeds 42 43 --tag baseline
+# Train baseline models for ablation
+python train.py --model cvae_hc --seeds 42   # CVAE baseline
+python train.py --model vae_h --seeds 42     # VAE baseline
 
 # Override hyperparameters
-python train.py --model vae_h --lr 1e-3 --epochs 50 --batch-size 128
+python train.py --model cvae_dhr --lr 1e-3 --epochs 100 --batch-size 256
 
-# Validate config paths without importing PyTorch training stack
+# Dry-run to check configuration
 python train.py --model cvae_dhr --dry-run
 ```
 
-**Where checkpoints are saved** is controlled by `training_runs_root` in `config.yaml` (default: `training_params`, under `root_path`). You can override the whole root with the environment variable `EVAE_TRAINING_RUNS_ROOT`, or a single run with `python train.py --exp-root /path/to/runs ...`. Trained runs look like: `<training_runs_root>/<MODEL_DIR>/[tag/]seed_<seed>/` with `encoder.pt`, `decoder.pt`, and `run_manifest.json`.
+Checkpoints are saved under `training_params/<MODEL>/seed_<n>/` by default.
 
-**Generation** uses the same `config.yaml` to find weights and to separate output files by model:
+### Key Training Hyperparameters
 
-- `default_generation_checkpoint` — per-model default folder (relative to `root_path`) containing `encoder.pt` and `decoder.pt`. Update these after training.
-- `checkpoint_aliases` — short names (e.g. `dhr_seed42`) that you can pass as `--checkpoint` instead of a long path.
-- `generation_output_root` — base directory for generated files; each model writes under `<generation_output_root>/<model_key>/...`. Override with `EVAE_GENERATION_OUTPUT_ROOT` if needed.
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `batch_size` | 256 | Training batch size |
+| `lr` | 5e-3 | Initial learning rate |
+| `num_epoch` | 100 | Total training epochs |
+| `latent_dim` | 64 | Latent space dimension |
+| `hidden_dim` | 256 | GRU hidden dimension |
+| `embed_dim` | 32 | Embedding dimension |
+
+## Generation
+
+Generate molecules with target EoF values after training:
 
 ```bash
-# Same --model as train.py; uses default_generation_checkpoint unless you pass --checkpoint
-python generate.py --model cvae_dhr --checkpoint dhr_seed42 --enthalpy -50 --num_samples 200
+# Generate molecules using PCVAE
 python generate_dhr.py --checkpoint training_params/CVAE_DHR/seed_42
-python generate_hc.py --checkpoint training_params/CVAE_HC/seed_42
+
+# Generate with specific target EoF
+python generate.py --model cvae_dhr --enthalpy -50 --num_samples 200
 ```
 
-You do **not** need a `.env` file: use `config.yaml` for project defaults and optional `EVAE_*` environment variables for machine-specific absolute paths.
-
-Legacy entry points `train_CVAE_DHR.py`, `train_CVAE_HC_SEED.py`, and `train_VAE_H_SEED.py` remain as thin wrappers around the same launcher.
-
-## Project layout (overview)
-
-| Path | Purpose |
-|------|---------|
-| `train.py` | CLI for all training jobs |
-| `training/launcher.py` | Model registry, dataloaders, optimizers |
-| `util/config_loader.py` | YAML loading without PyTorch (supports `--dry-run`) |
-| `model/` | Encoder / decoder definitions |
-| `dataset/` | `SmilesDataset`, `SmilesDictDataset`, hybrid/SOAP helpers |
-| `util/` | Tokenizer helpers, enthalpy predictor, logging |
-| `visualization/` | Analysis and plotting scripts |
-| `pcvae_tool/` | Optional inference-oriented utilities |
+Generated SMILES and evaluation results are saved under `generations/`.
 
 ## Citation
 
-If you use this code in academic work, please cite your associated publication once it is available, and reference this repository URL.
+If you find this code useful, please cite our paper:
+
+```bibtex
+@article{xxx,
+  title={xxx},
+  author={xxx},
+  journal={xxx},
+  year={2026}
+}
+```
+
+[![DOI](https://img.shields.io/badge/DOI-10.xxxx/xxxxx-blue)](https://doi.org/10.xxxx/xxxxx)
 
 ## License
 
-Specify your license here (no `LICENSE` file is included in the repository by default).
-
----
-
-## 中文简介
-
-本项目用于基于 **SMILES** 的分子生成，结合 **生成焓（条件）** 的变分自编码器（VAE / CVAE）实验代码。统一训练入口为 **`python train.py`**，生成可用 **`python generate.py --model ...`** 或 `generate_dhr.py` / `generate_hc.py`。训练输出目录、生成时加载的默认权重、各模型结果子目录均在 **`config.yaml`** 中配置；也可用环境变量 **`EVAE_TRAINING_RUNS_ROOT`** / **`EVAE_GENERATION_OUTPUT_ROOT`** 覆盖本机绝对路径。详细命令见上文。
+This project is released for academic research purposes.
