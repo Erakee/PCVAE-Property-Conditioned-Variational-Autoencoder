@@ -17,8 +17,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Load the model
 model = MPNNModel(num_layers=2, emb_dim=256, in_dim=42, edge_dim=10, out_dim=1).to(device)
-# model.load_state_dict(torch.load('enthalpy/stateGNN.pt'))  # Adjust the path as necessary
-model.load_state_dict(torch.load(r'D:\Project\EVAE_paper\enthalpy\stateGNN.pt'))
+_model_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+model.load_state_dict(torch.load(os.path.join(_model_dir, 'enthalpy', 'stateGNN.pt')))
 model.eval()
 
 
@@ -40,18 +40,6 @@ def get_atom_features(atom,
                       hydrogens_implicit=True):
     """
     Takes an RDKit atom object as input and gives a 1d-numpy array of atom features as output.
-    原子类型、重原子邻居的数量、形式电荷、杂化类型、原子是否在环中、原子是否是芳香族、原子质量、范德华半径和共价半径。
-    原子序号、度考虑现在补充  自由基可以后续看情况
-    电子属性（该原子提供电子还是接收电子）可以看情况补充
-    原子序号:{atom.GetAtomicNum()},  ###这个有必要补充一下
-    手性信息:{atom.GetChiralTag()}, 
-    度:{atom.GetTotalDegree()},  ###这个有必要补充一下
-    电荷:{atom.GetFormalCharge()}, 
-    连接氢原子数:{atom.GetTotalNumHs()}, 
-    自由基:{atom.GetNumRadicalElectrons()}, #### 这个暂时应该用不到
-    杂化类型:{atom.GetHybridization()}, 
-    芳香性:{atom.GetIsAromatic()}, 
-    是否在环上:{atom.IsInRing()
     """
     # define list of permitted atoms   
     permitted_list_of_atoms = ['C', 'N', 'O', 'F', 'Cl', 'Br', 'I', 'Unknown']
@@ -88,9 +76,7 @@ def get_atom_features(atom,
 def get_bond_features(bond,
                       use_stereochemistry=True):
     """
-    Takes an RDKit bond object as input and gives a 1d-numpy array of bond features as output.
-    键特征有：键类型、键是否共轭、键是否在环中。作为附加选项，用户可以指定是否在双键周围包含 E-Z 立体化学特征。
-    可以补充距离矩阵（原子之间的最短距离）
+    Takes a bond object as input and gives a 1d-numpy array of bond features as output.
     """
     permitted_list_of_bond_types = [Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE,
                                     Chem.rdchem.BondType.TRIPLE, Chem.rdchem.BondType.AROMATIC]
@@ -158,18 +144,14 @@ def predict_enthalpy(smiles_str):
     """
     # Check if the SMILES string is valid
     if not smiles_str or not utils.isValidSmiles(smiles_str) or len(smiles_str) <= 2:
-        # print(f"Invalid SMILES string: {smiles_str}")
-        return 0.0  # 或者返回一个默认值
+        return 0.0
 
     # Convert SMILES to graph data
-    data = create_single_graph_from_smiles(smiles_str)  # 使用转换方法生成 Data 对象
-    # print(f"Data: {data}")  # 打印数据以检查
-    # Prepare the data for the model
-    data = data.to(device)  # Move data to the appropriate device
-    # Make prediction
+    data = create_single_graph_from_smiles(smiles_str)
+    data = data.to(device)
     with torch.no_grad():
-        pred = model(data)  # 直接传递 data 对象
-        return pred.item()  # Return the predicted enthalpy value
+        pred = model(data)
+        return pred.item()
 
 
 if __name__ == '__main__':
@@ -178,6 +160,3 @@ if __name__ == '__main__':
     enthalpy = predict_enthalpy(smiles_exp)
     print(f"Predicted Enthalpy: {enthalpy}")
 
- # NTO pred 4 C1(=NC(=O)NN1)[N+](=O)[O-]
- # TNB -0.6554650664329529 C1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]
- # TNT CC1=C(C=C(C=C1[N+](=O)[O-])[N+](=O)[O-])[N+](=O)[O-]

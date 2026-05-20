@@ -30,7 +30,7 @@ ENV/
 Thumbs.db
 
 # Tokenizer (auto-generated from data/*.smi)
-.tokenizer.pkl
+*.tokenizer.pkl
 
 # Debug and development scripts
 debug/
@@ -62,8 +62,25 @@ pcvae_tool/
 parameters/encoder.pt
 parameters/decoder.pt
 
-# FP data (generated utility file)
-data/em_fps.pkl
+# Pickle caches
+*.pkl
 
-# SMILES generation output archive
-generate_smi.zip
+# Enthalpy training artifacts
+enthalpy/last_epoch_graph_data.pt
+enthalpy/diaoyong.ipynb
+
+# Backup / non-essential data files
+data/em_train - 副本.csv
+data/top_similar_structures.png
+
+# Non-essential utilities (hardcoded paths / debug tools)
+util/param2pt.py
+util/view_fps.py
+
+# ZIP archives
+*.zip
+
+# Logs
+*.log
+tensorboard/
+runs/
